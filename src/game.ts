@@ -1,7 +1,7 @@
 import Phaser from 'phaser';
 import { BOARD, FRUITS, FIXED_STEP, SPAWN_GRACE, DIFFICULTIES, DEFAULT_DIFFICULTY, GardenRandom, TurnHistory, randomLevel, fruitRadius, selectMerges, advanceDanger, clampDropX, type Difficulty, type Contact, type RoundSnapshot, type SessionSnapshot } from './rules.ts';
 import { saveFruit, restoreFruit } from './physics-state.ts';
-import { FRUIT_ATLAS, FRUIT_SPRITES } from './fruit-art.ts';
+import { DEFAULT_FRUIT_STYLE, FRUIT_STYLES, type FruitStyleId } from './fruit-art.ts';
 import { FRUIT_MATERIAL, PHYSICS_ENGINE, GROWTH_DURATION, growthScale, growBody, applyMergePressure, wakePile, type SleepingAPI } from './physics.ts';
 import type { GardenAudio } from './audio.ts';
 
@@ -41,6 +41,7 @@ export class GardenScene extends Phaser.Scene {
   drops = 0;
   current = 0;
   next = 0;
+  fruitStyle: FruitStyleId;
   private callbacks: GardenCallbacks;
   private audio: GardenAudio;
   private fruits = new Map<number, Fruit>();
@@ -67,26 +68,25 @@ export class GardenScene extends Phaser.Scene {
   private history = new TurnHistory();
   private effects = new Set<Phaser.GameObjects.GameObject>();
   private lastWake = -1000;
+  private styleLoads = new Map<FruitStyleId, Promise<void>>();
 
-  constructor(callbacks: GardenCallbacks, audio: GardenAudio, pixelRatio: number) {
+  constructor(callbacks: GardenCallbacks, audio: GardenAudio, pixelRatio: number, style: FruitStyleId) {
     super('garden');
     this.callbacks = callbacks;
     this.audio = audio;
     this.pixelRatio = pixelRatio;
+    this.fruitStyle = style;
   }
 
   preload(): void {
-    this.load.image('fruit-atlas', `${import.meta.env.BASE_URL}${FRUIT_ATLAS.file}`);
+    this.load.image(this.artKey(), `${import.meta.env.BASE_URL}${FRUIT_STYLES[this.fruitStyle].atlas.file}`);
     this.load.on('loaderror', () => this.callbacks.error());
   }
 
   create(): void {
-    if (!this.textures.exists('fruit-atlas')) return;
+    if (!this.textures.exists(this.artKey())) return;
     this.cameras.main.setOrigin(0, 0).setZoom(this.pixelRatio);
-    const atlas = this.textures.get('fruit-atlas');
-    const source = atlas.getSourceImage() as HTMLImageElement;
-    if (source.width !== FRUIT_ATLAS.width || source.height !== FRUIT_ATLAS.height) { this.callbacks.error(); return; }
-    FRUIT_SPRITES.forEach(([x, y, size], i) => atlas.add(i, 0, x, y, size, size));
+    try { this.registerArt(this.fruitStyle); } catch { this.callbacks.error(); return; }
 
     const shadow = this.textures.createCanvas('fruit-shadow', 128, 40);
     if (shadow) {
@@ -186,9 +186,67 @@ export class GardenScene extends Phaser.Scene {
     front.fillStyle(0xd5b77d, 1).fillCircle(385, 538, 2);
   }
 
+  private artKey(style = this.fruitStyle): string { return `fruit-style-${style}`; }
+
+  private registerArt(style: FruitStyleId): void {
+    const { atlas, sprites } = FRUIT_STYLES[style];
+    const texture = this.textures.get(this.artKey(style));
+    const source = texture.getSourceImage() as HTMLImageElement;
+    if (source.width !== atlas.width || source.height !== atlas.height) throw new Error('Unexpected fruit atlas dimensions');
+    sprites.forEach(([x, y, size], i) => { if (!texture.has(String(i))) texture.add(i, 0, x, y, size, size); });
+  }
+
+  // Loading is separate from applying: closing the picker can safely cancel a choice.
+  prepareFruitStyle(style: FruitStyleId): Promise<void> {
+    if (this.textures.exists(this.artKey(style))) return Promise.resolve();
+    const existing = this.styleLoads.get(style);
+    if (existing) return existing;
+    const pending = new Promise<void>((resolve, reject) => {
+      const image = new window.Image();
+      const cleanup = () => { clearTimeout(timeout); image.onload = null; image.onerror = null; };
+      const timeout = setTimeout(() => { cleanup(); reject(new Error('Fruit style loading timed out')); }, 20000);
+      image.onload = () => {
+        cleanup();
+        try {
+          this.textures.addImage(this.artKey(style), image);
+          this.registerArt(style);
+          resolve();
+        } catch (error) {
+          if (this.textures.exists(this.artKey(style))) this.textures.remove(this.artKey(style));
+          reject(error);
+        }
+      };
+      image.onerror = () => { cleanup(); reject(new Error('Fruit style unavailable')); };
+      image.src = `${import.meta.env.BASE_URL}${FRUIT_STYLES[style].atlas.file}`;
+    });
+    this.styleLoads.set(style, pending);
+    const forget = () => { this.styleLoads.delete(style); };
+    void pending.then(forget, forget);
+    return pending;
+  }
+
+  applyFruitStyle(style: FruitStyleId): void {
+    if (style === this.fruitStyle) return;
+    if (!this.textures.exists(this.artKey(style))) throw new Error('Fruit style not prepared');
+    const previous = FRUIT_STYLES[this.fruitStyle];
+    const next = FRUIT_STYLES[style];
+    const images = new Set([...this.fruits.values()].map(fruit => fruit.image));
+    if (this.preview) images.add(this.preview);
+    for (const effect of this.effects) if (effect instanceof Phaser.GameObjects.Image && typeof effect.getData('fruitLevel') === 'number') images.add(effect);
+    // Change images only. The live bodies, motion, RNG, score and undo history stay intact.
+    for (const image of images) {
+      const level = image.getData('fruitLevel') as number;
+      const [, , size, ox, oy, diameter] = next.sprites[level];
+      const ratio = previous.sprites[level][5] / diameter;
+      const scaleX = image.scaleX * ratio, scaleY = image.scaleY * ratio;
+      image.setTexture(this.artKey(style), level).setOrigin(ox / size, oy / size).setScale(scaleX, scaleY);
+    }
+    this.fruitStyle = style;
+  }
+
   private makeArt(x: number, y: number, frame: number, radius: number): Phaser.GameObjects.Image {
-    const [, , size, ox, oy, diameter] = FRUIT_SPRITES[frame];
-    return this.add.image(x, y, 'fruit-atlas', frame)
+    const [, , size, ox, oy, diameter] = FRUIT_STYLES[this.fruitStyle].sprites[frame];
+    return this.add.image(x, y, this.artKey(), frame).setData('fruitLevel', frame)
       .setOrigin(ox / size, oy / size)
       .setScale(radius * 2 / diameter);
   }
@@ -461,8 +519,8 @@ export class GardenScene extends Phaser.Scene {
     this.guide.fillStyle(0x94a17a, active ? 0.32 : 0.12);
     for (let y = 88; y < Math.max(90, landing - 5); y += 12) this.guide.fillCircle(this.aimX, y, 1.2);
     if (landing > 100) this.guide.lineStyle(match ? 1.6 : 1, match ? 0x8faa6d : FRUITS[this.current].color, match ? 0.6 : 0.3).strokeCircle(this.aimX, landing, radius);
-    const [, , size, ox, oy, diameter] = FRUIT_SPRITES[this.current];
-    this.preview.setVisible(true).setFrame(this.current).setOrigin(ox / size, oy / size)
+    const [, , size, ox, oy, diameter] = FRUIT_STYLES[this.fruitStyle].sprites[this.current];
+    this.preview.setVisible(true).setFrame(this.current).setData('fruitLevel', this.current).setOrigin(ox / size, oy / size)
       .setPosition(this.aimX, BOARD.spawnY + (this.gentle ? 0 : Math.sin(this.clock / 600) * 2))
       .setScale(radius * 2 / diameter).setAlpha(active ? 1 : 0.35);
   }
@@ -527,7 +585,7 @@ export class GardenScene extends Phaser.Scene {
 
     for (const fruit of this.fruits.values()) {
       const { x, y } = fruit.body.position;
-      const diameter = FRUIT_SPRITES[fruit.level][5];
+      const diameter = FRUIT_STYLES[this.fruitStyle].sprites[fruit.level][5];
       const radius = fruit.body.circleRadius;
       const baseScale = radius * 2 / diameter;
       const popTime = Math.min(1, Math.max(0, (this.clock - fruit.born) / 240));
@@ -542,8 +600,8 @@ export class GardenScene extends Phaser.Scene {
   }
 }
 
-export function createGarden(parent: HTMLElement, callbacks: GardenCallbacks, audio: GardenAudio, pixelRatio = Math.min(window.devicePixelRatio || 1, 2)): GardenScene {
-  const scene = new GardenScene(callbacks, audio, pixelRatio);
+export function createGarden(parent: HTMLElement, callbacks: GardenCallbacks, audio: GardenAudio, pixelRatio = Math.min(window.devicePixelRatio || 1, 2), style: FruitStyleId = DEFAULT_FRUIT_STYLE): GardenScene {
+  const scene = new GardenScene(callbacks, audio, pixelRatio, style);
   new Phaser.Game({
     type: Phaser.AUTO,
     parent,

@@ -2,8 +2,9 @@
 // Vite removes this entry point and all these controls from production builds.
 import { BOARD, DIFFICULTIES, SPAWN_GRACE, FIXED_STEP, fruitRadius, type SessionSnapshot } from './rules.ts';
 import type { GardenScene } from './game.ts';
+import { FRUIT_STYLES } from './fruit-art.ts';
 
-export function mountQA(scene: GardenScene, start: (snapshot: SessionSnapshot) => void): void {
+export function mountQA(scene: GardenScene, start: (snapshot: SessionSnapshot) => void, inspect: () => SessionSnapshot | null): void {
   const panel = document.createElement('details');
   panel.open = true;
   panel.setAttribute('aria-label', '开发验收场景');
@@ -48,6 +49,22 @@ export function mountQA(scene: GardenScene, start: (snapshot: SessionSnapshot) =
   const status = document.createElement('output');
   status.style.cssText = 'display:block;width:100%;color:#6b795d';
   controls.append(status);
-  setInterval(() => { status.textContent = `${DIFFICULTIES[scene.difficulty].name} · 状态 ${scene.phase} · 分数 ${scene.score} · 最高 ${scene.highest + 1} 级`; }, 200);
+  const check = document.createElement('button');
+  check.textContent = '暂停检查对局';
+  check.style.cssText = 'min-height:36px;padding:5px 7px;background:#edf0e2;border-radius:6px;font:10px sans-serif';
+  const result = document.createElement('output');
+  result.id = 'qa-inspection';
+  result.style.cssText = 'display:block;width:100%;color:#527044';
+  check.addEventListener('click', () => {
+    scene.pause();
+    scene.save();
+    const saved = inspect();
+    if (!saved) { result.textContent = '没有进行中的对局'; return; }
+    let hash = 2166136261;
+    for (const char of JSON.stringify(saved)) hash = Math.imul(hash ^ char.charCodeAt(0), 16777619);
+    result.textContent = `${saved.score} 分 · 投放 ${saved.drops} · ${saved.fruits.length} 颗 · 对局指纹 ${(hash >>> 0).toString(16)}`;
+  });
+  controls.append(check, result);
+  setInterval(() => { status.textContent = `${DIFFICULTIES[scene.difficulty].name} · 状态 ${scene.phase} · 分数 ${scene.score} · 最高 ${scene.highest + 1} 级 · 外观 ${FRUIT_STYLES[scene.fruitStyle].shortName}`; }, 200);
   document.body.append(panel);
 }

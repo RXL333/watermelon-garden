@@ -1,7 +1,7 @@
 import './style.css';
-import { icon, fruitArt } from './icons.ts';
+import { icon, fruitArt as renderFruitArt } from './icons.ts';
 import { FRUITS, DIFFICULTIES, DIFFICULTY_IDS, UNDO_LIMIT, isDifficulty, type Difficulty, type SessionSnapshot } from './rules.ts';
-import { FRUIT_ATLAS } from './fruit-art.ts';
+import { DEFAULT_FRUIT_STYLE, FRUIT_STYLES, FRUIT_STYLE_IDS, isFruitStyle, fruitPaint, type FruitStyleId } from './fruit-art.ts';
 import { GardenStorage } from './storage.ts';
 import { GardenAudio } from './audio.ts';
 import { createGarden, type GardenScene } from './game.ts';
@@ -10,9 +10,13 @@ const storage = new GardenStorage();
 const initialUndos = storage.session?.undosLeft ?? UNDO_LIMIT;
 let selectedDifficulty: Difficulty = storage.session?.difficulty ?? storage.preferences.difficulty;
 let pendingDifficulty = selectedDifficulty;
+let selectedStyle = storage.preferences.fruitStyle;
+let pendingStyle = selectedStyle;
+let styleRequest = 0;
+const fruitArt = (level: number, className = ''): string => renderFruitArt(level, className, selectedStyle);
 const audio = new GardenAudio();
 audio.enabled = storage.preferences.sound;
-document.documentElement.style.setProperty('--fruit-atlas', `url("${new URL(FRUIT_ATLAS.file, document.baseURI).href}")`);
+document.documentElement.dataset.fruitStyle = selectedStyle;
 const pointerHint = matchMedia('(hover: hover) and (pointer: fine)').matches ? '移动鼠标瞄准，点击落下' : '按住移动，松手落下';
 
 document.querySelector<HTMLDivElement>('#app')!.innerHTML = `
@@ -31,6 +35,7 @@ document.querySelector<HTMLDivElement>('#app')!.innerHTML = `
         <div><h1>西瓜小院</h1><p>一颗一颗，慢慢长大</p></div>
       </div>
       <nav class="top-actions" aria-label="游戏设置">
+        <button id="styles" class="icon-button style-entry" aria-label="选择水果风格" title="水果风格" disabled>${icon('palette')}<span>风格</span></button>
         <button id="sound" class="icon-button" aria-label="关闭音效" aria-pressed="true">${icon('sound')}</button>
         <button id="pause" class="icon-button" aria-label="暂停游戏" disabled>${icon('pause')}</button>
       </nav>
@@ -54,7 +59,7 @@ document.querySelector<HTMLDivElement>('#app')!.innerHTML = `
         <button id="start" class="primary-button" disabled><span id="start-label">水果准备中</span><span id="start-icon" class="loading-dot"></span></button>
         ${storage.session ? '<button id="fresh-start" class="text-button">开一局新的</button>' : '<span class="intro-footnote">每局 3 次撤回，放心试一试</span>'}
       </div>
-      <div id="load-error" class="load-error" hidden><p>水果还没准备好</p><span>请检查网络，再试一次。</span><button class="primary-button" id="reload">重新加载 ${icon('restart')}</button></div>
+      <div id="load-error" class="load-error" hidden><p>水果还没准备好</p><span>请检查网络，再试一次。</span><button class="primary-button" id="reload">重新加载 ${icon('restart')}</button><button id="restore-art" class="text-button" ${selectedStyle === DEFAULT_FRUIT_STYLE ? 'hidden' : ''}>使用原版重新打开</button></div>
     </section>
 
     <section class="growth" aria-label="水果进化顺序">
@@ -94,6 +99,17 @@ function updateSound(): void {
   button.setAttribute('aria-pressed', String(audio.enabled));
 }
 updateSound();
+
+function updateStyle(): void {
+  const name = FRUIT_STYLES[selectedStyle].name;
+  document.documentElement.dataset.fruitStyle = selectedStyle;
+  $('#styles').setAttribute('aria-label', `选择水果风格，当前${name}`);
+  $('#styles').title = `水果风格 · ${name}`;
+  document.querySelectorAll<HTMLElement>('[data-fruit-art]:not([data-style-fixed])').forEach(element => {
+    element.style.cssText = fruitPaint(Number(element.dataset.fruitArt), selectedStyle, document.baseURI);
+  });
+}
+updateStyle();
 
 function updateDifficulty(): void {
   const mode = DIFFICULTIES[selectedDifficulty];
@@ -148,6 +164,8 @@ function begin(resume: boolean, preset?: SessionSnapshot, difficulty = selectedD
 }
 
 function showDialog(content: string, resume = true): void {
+  styleRequest++;
+  dialog.dataset.view = '';
   resumeOnClose = resume && (scene?.phase === 'playing' || (dialog.open && resumeOnClose));
   scene?.pause();
   $('#dialog-content').innerHTML = content;
@@ -166,11 +184,66 @@ function showPause(): void {
     <button class="primary-button" data-action="close">继续种西瓜 ${icon('play')}</button>
     <button class="secondary-button" data-action="restart">重新开始 ${icon('restart')}</button>
     <button class="pause-difficulty text-button" data-action="difficulty">${DIFFICULTIES[scene.difficulty].name}难度 · 更换难度 ${icon('arrow')}</button>
+    <button class="pause-style text-button" data-action="styles">${icon('palette')} 水果风格 · ${FRUIT_STYLES[selectedStyle].name} ${icon('arrow')}</button>
     <p class="pause-tip">${icon('undo')} 本局还可撤回 ${scene.undosLeft} 次，给小失误一点余地</p>
     <label class="setting-row"><span><strong>轻柔动效</strong><small>减少粒子与画面晃动</small></span><input id="gentle" type="checkbox" role="switch" ${storage.preferences.gentle ? 'checked' : ''}><span class="switch" aria-hidden="true"></span></label>
     <p class="save-note">${storage.available ? `${icon('check')} 进度已保存在这台设备` : '当前浏览器无法保存进度，关闭页面后记录可能丢失'}</p>
     <p class="offline-note" id="offline-status">${offlineText()}</p>
   `);
+}
+
+function showStyles(): void {
+  if (!ready) return;
+  pendingStyle = selectedStyle;
+  showDialog(`
+    ${closeButton}<span class="dialog-eyebrow">FIND YOUR FRUIT STYLE</span>
+    <h2 id="dialog-title">给水果换件新衣</h2>
+    <p class="style-intro">五种模样，同一份好心情。</p>
+    <div class="style-options" role="group" aria-label="水果风格">${FRUIT_STYLE_IDS.map(id => {
+      const style = FRUIT_STYLES[id];
+      return `<button class="style-card" data-pick-style="${id}" aria-pressed="${id === selectedStyle}">
+        <span class="style-preview" aria-hidden="true">${[2, 8, 10].map(level => renderFruitArt(level, '', id, true)).join('')}</span>
+        <span class="style-card-copy"><strong>${style.name}<small>${style.hasFaces ? '表情款' : '纯水果'}</small></strong><span>${style.description}</span></span>
+        <span class="style-check" aria-hidden="true">${icon('check')}</span>
+      </button>`;
+    }).join('')}</div>
+    <div class="style-footer"><p id="style-status" class="style-status" role="status">随时换装，对局和分数都会保留。</p>
+    <button class="primary-button" data-action="style-apply">继续使用${FRUIT_STYLES[selectedStyle].name} ${icon('check')}</button>
+    <button class="text-button style-cancel" data-action="close">返回小院</button></div>
+  `);
+  dialog.dataset.view = 'styles';
+}
+
+async function applyChosenStyle(): Promise<void> {
+  if (dialog.dataset.view !== 'styles') return;
+  if (pendingStyle === selectedStyle) { dialog.close(); return; }
+  const chosen = pendingStyle;
+  const ticket = ++styleRequest;
+  const button = dialog.querySelector<HTMLButtonElement>('[data-action="style-apply"]')!;
+  const status = $('#style-status');
+  button.disabled = true;
+  button.innerHTML = '水果准备中 <span class="loading-dot"></span>';
+  status.textContent = `正在准备${FRUIT_STYLES[chosen].name}…`;
+  status.classList.remove('is-error');
+  dialog.querySelectorAll<HTMLButtonElement>('[data-pick-style]').forEach(card => { card.disabled = true; });
+  try {
+    await scene.prepareFruitStyle(chosen);
+    if (ticket !== styleRequest || !dialog.open || dialog.dataset.view !== 'styles') return;
+    scene.applyFruitStyle(chosen);
+    selectedStyle = chosen;
+    storage.preferences.fruitStyle = chosen;
+    storage.save();
+    updateStyle();
+    dialog.close();
+    announce(`已换成${FRUIT_STYLES[chosen].name}`);
+  } catch {
+    if (ticket !== styleRequest || !dialog.open || dialog.dataset.view !== 'styles') return;
+    status.textContent = '这套水果暂时没准备好，请联网后再试一次。';
+    status.classList.add('is-error');
+    button.disabled = false;
+    button.innerHTML = `重新加载并使用 ${icon('restart')}`;
+    dialog.querySelectorAll<HTMLButtonElement>('[data-pick-style]').forEach(card => { card.disabled = false; });
+  }
 }
 
 function showDifficulty(): void {
@@ -254,6 +327,7 @@ scene = createGarden($('#game'), {
     ready = true;
     startButton.disabled = false;
     $<HTMLButtonElement>('#difficulty').disabled = false;
+    $<HTMLButtonElement>('#styles').disabled = false;
     $('#start-label').textContent = storage.session ? `继续上次 · ${storage.session.score.toLocaleString()} 分` : '种下第一颗水果';
     $('#start-icon').outerHTML = icon('arrow');
     $('.garden-app').classList.add('is-ready');
@@ -294,11 +368,11 @@ scene = createGarden($('#game'), {
     showHarvest(score, highest);
   },
   save(snapshot) { storage.save(snapshot); },
-}, audio, import.meta.env.DEV && new URLSearchParams(location.search).get('qa') === 'retina' ? 2 : Math.min(window.devicePixelRatio || 1, 2));
+}, audio, import.meta.env.DEV && new URLSearchParams(location.search).get('qa') === 'retina' ? 2 : Math.min(window.devicePixelRatio || 1, 2), selectedStyle);
 scene.gentle = storage.preferences.gentle;
 
 if (import.meta.env.DEV && new URLSearchParams(location.search).has('qa')) {
-  void import('./qa.ts').then(({ mountQA }) => mountQA(scene, snapshot => begin(false, snapshot)));
+  void import('./qa.ts').then(({ mountQA }) => mountQA(scene, snapshot => begin(false, snapshot), () => storage.session));
 }
 
 startButton.addEventListener('click', () => begin(!!storage.session));
@@ -313,6 +387,7 @@ function undoLastDrop(): void {
 undoButton.addEventListener('click', undoLastDrop);
 $('.playfield').addEventListener('animationend', event => { if (event.animationName === 'rewind-wash') $('.playfield').classList.remove('is-rewinding'); });
 $('#difficulty').addEventListener('click', showDifficulty);
+$('#styles').addEventListener('click', showStyles);
 document.querySelectorAll<HTMLButtonElement>('[data-intro-difficulty]').forEach(button => button.addEventListener('click', () => {
   if (!isDifficulty(button.dataset.introDifficulty)) return;
   selectedDifficulty = button.dataset.introDifficulty;
@@ -330,8 +405,22 @@ $('#sound').addEventListener('click', () => {
   updateSound();
 });
 $('#reload').addEventListener('click', () => location.reload());
+$('#restore-art').addEventListener('click', () => {
+  storage.preferences.fruitStyle = DEFAULT_FRUIT_STYLE;
+  storage.save();
+  location.reload();
+});
 
 dialog.addEventListener('click', event => {
+  const style = (event.target as HTMLElement).closest<HTMLButtonElement>('[data-pick-style]');
+  if (style && !style.disabled && isFruitStyle(style.dataset.pickStyle)) {
+    pendingStyle = style.dataset.pickStyle;
+    dialog.querySelectorAll<HTMLButtonElement>('[data-pick-style]').forEach(card => card.setAttribute('aria-pressed', String(card.dataset.pickStyle === pendingStyle)));
+    const button = dialog.querySelector<HTMLButtonElement>('[data-action="style-apply"]')!;
+    button.innerHTML = `${pendingStyle === selectedStyle ? '继续使用' : '使用'}${FRUIT_STYLES[pendingStyle].name} ${icon('check')}`;
+    $('#style-status').textContent = '随时换装，对局和分数都会保留。';
+    $('#style-status').classList.remove('is-error');
+  }
   const fruit = (event.target as HTMLElement).closest<HTMLElement>('[data-fruit]')?.dataset.fruit;
   if (fruit !== undefined) { showFruitDetail(Number(fruit)); return; }
   const difficulty = (event.target as HTMLElement).closest<HTMLElement>('[data-pick-difficulty]')?.dataset.pickDifficulty;
@@ -346,6 +435,8 @@ dialog.addEventListener('click', event => {
   if (action === 'new-game') begin(false);
   if (action === 'collection') showCollection();
   if (action === 'difficulty') showDifficulty();
+  if (action === 'styles') showStyles();
+  if (action === 'style-apply' && !(event.target as HTMLElement).closest<HTMLButtonElement>('button')?.disabled) void applyChosenStyle();
   if (action === 'difficulty-start') begin(false, undefined, pendingDifficulty);
 });
 dialog.addEventListener('change', event => {
@@ -356,6 +447,7 @@ dialog.addEventListener('change', event => {
   }
 });
 dialog.addEventListener('close', () => {
+  styleRequest++;
   if (resumeOnClose) scene.resume();
   resumeOnClose = false;
   // Closing the fruit book after a finished game returns to its result screen.

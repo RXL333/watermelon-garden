@@ -2,7 +2,7 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
 import { inflateSync } from 'node:zlib';
-import { FRUIT_ATLAS, FRUIT_SPRITES } from '../src/fruit-art.ts';
+import { FRUIT_STYLES, FRUIT_STYLE_IDS } from '../src/fruit-art.ts';
 
 // Read PNG alpha directly, so the source-art boundary check also runs in CI.
 function pngAlpha(path: URL) {
@@ -39,19 +39,23 @@ function pngAlpha(path: URL) {
   return { width, height, alpha: (x: number, y: number) => pixels[y * stride + x * 4 + 3] };
 }
 
-test('every fruit, crown and stem stays in its own cell and fully inside its shared UI/game crop', () => {
-  const png = pngAlpha(new URL(`../public/${FRUIT_ATLAS.file}`, import.meta.url));
-  assert.equal(png.width, FRUIT_ATLAS.width);
-  assert.equal(png.height, FRUIT_ATLAS.height);
-  assert.equal(FRUIT_SPRITES.length, 12);
-  FRUIT_SPRITES.forEach(([x, y, size, ox, oy, diameter], i) => {
-    const left = i % 4 * 362, top = Math.floor(i / 4) * 362;
-    assert.ok(x >= left && x + size <= left + 362 && y >= top && y + size <= top + 362, `crop ${i} stays in cell`);
+for (const id of FRUIT_STYLE_IDS) test(`${id}: every fruit, crown and stem stays in its own cell and fully inside its shared UI/game crop`, () => {
+  const { atlas, sprites } = FRUIT_STYLES[id];
+  const png = pngAlpha(new URL(`../public/${atlas.file}`, import.meta.url));
+  assert.equal(png.width, atlas.width);
+  assert.equal(png.height, atlas.height);
+  assert.equal(sprites.length, 12);
+  const cell = atlas.width / 4;
+  assert.equal(atlas.height / 3, cell);
+  assert.ok(atlas.gutter >= 8);
+  sprites.forEach(([x, y, size, ox, oy, diameter], i) => {
+    const left = i % 4 * cell, top = Math.floor(i / 4) * cell;
+    assert.ok(x >= left && x + size <= left + cell && y >= top && y + size <= top + cell, `crop ${i} stays in cell`);
     assert.ok(ox > 0 && ox < size && oy > 0 && oy < size && diameter > 0 && diameter <= size);
     let visible = 0;
-    for (let py = top; py < top + 362; py++) for (let px = left; px < left + 362; px++) {
+    for (let py = top; py < top + cell; py++) for (let px = left; px < left + cell; px++) {
       const alpha = png.alpha(px, py);
-      if (px < left + 24 || px >= left + 338 || py < top + 24 || py >= top + 338) assert.ok(alpha <= 8, `fruit ${i} crossed the 24px gutter at ${px},${py}`);
+      if (px < left + atlas.gutter || px >= left + cell - atlas.gutter || py < top + atlas.gutter || py >= top + cell - atlas.gutter) assert.ok(alpha <= 8, `fruit ${i} crossed its ${atlas.gutter}px gutter at ${px},${py}`);
       if (alpha > 32) {
         visible++;
         assert.ok(px >= x + 3 && px < x + size - 3 && py >= y + 3 && py < y + size - 3, `fruit ${i} silhouette cropped at ${px},${py}`);
