@@ -32,6 +32,7 @@ export class GardenAudio {
   }
 
   drop(): void { this.note(510, 0.12, 0.035, 0, 'triangle'); }
+  undo(): void { this.note(660, 0.17, 0.025); this.note(440, 0.22, 0.025, 0.08); }
   impact(): void {
     if (performance.now() - this.lastImpact < 140) return;
     this.lastImpact = performance.now();

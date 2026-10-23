@@ -1,8 +1,11 @@
 import Phaser from 'phaser';
-import { BOARD, FRUITS, FIXED_STEP, SPAWN_GRACE, DIFFICULTIES, DEFAULT_DIFFICULTY, GardenRandom, randomLevel, fruitRadius, selectMerges, advanceDanger, clampDropX, type Difficulty, type Contact, type SessionSnapshot } from './rules.ts';
+import { BOARD, FRUITS, FIXED_STEP, SPAWN_GRACE, DIFFICULTIES, DEFAULT_DIFFICULTY, GardenRandom, TurnHistory, randomLevel, fruitRadius, selectMerges, advanceDanger, clampDropX, type Difficulty, type Contact, type RoundSnapshot, type SessionSnapshot } from './rules.ts';
+import { saveFruit, restoreFruit } from './physics-state.ts';
+import { FRUIT_ATLAS, FRUIT_SPRITES } from './fruit-art.ts';
 import type { GardenAudio } from './audio.ts';
 
 export type Phase = 'loading' | 'intro' | 'playing' | 'paused' | 'over';
+export type TurnState = { current: number; drops: number; canUndo: boolean; undosLeft: number };
 type Fruit = {
   body: MatterJS.BodyType;
   image: Phaser.GameObjects.Image;
@@ -23,14 +26,8 @@ export type GardenCallbacks = {
   victory: () => void;
   over: (score: number, highest: number) => void;
   save: (session: SessionSnapshot) => void;
+  turn: (state: TurnState) => void;
 };
-
-// Atlas cells stay intact. Origins align each painted round body, rather than its leaf/stem, with its collider.
-const METRICS = [
-  [185, 213, 286], [192, 227, 282], [192, 215, 294], [186, 215, 304],
-  [181, 219, 306], [184, 205, 318], [179, 214, 311], [182, 213, 309],
-  [183, 224, 294], [180, 197, 326], [182, 194, 338], [181, 190, 338],
-];
 
 export class GardenScene extends Phaser.Scene {
   phase: Phase = 'loading';
@@ -63,8 +60,9 @@ export class GardenScene extends Phaser.Scene {
   private warningText?: Phaser.GameObjects.Text;
   private emptyText?: Phaser.GameObjects.Text;
   private particleCount = 0;
-  private cell = 362;
   private pixelRatio: number;
+  private history = new TurnHistory();
+  private effects = new Set<Phaser.GameObjects.GameObject>();
 
   constructor(callbacks: GardenCallbacks, audio: GardenAudio, pixelRatio: number) {
     super('garden');
@@ -74,7 +72,7 @@ export class GardenScene extends Phaser.Scene {
   }
 
   preload(): void {
-    this.load.image('fruit-atlas', `${import.meta.env.BASE_URL}assets/fruit-atlas.png`);
+    this.load.image('fruit-atlas', `${import.meta.env.BASE_URL}${FRUIT_ATLAS.file}`);
     this.load.on('loaderror', () => this.callbacks.error());
   }
 
@@ -83,8 +81,8 @@ export class GardenScene extends Phaser.Scene {
     this.cameras.main.setOrigin(0, 0).setZoom(this.pixelRatio);
     const atlas = this.textures.get('fruit-atlas');
     const source = atlas.getSourceImage() as HTMLImageElement;
-    this.cell = source.width / 4;
-    for (let i = 0; i < 12; i++) atlas.add(i, 0, (i % 4) * this.cell, Math.floor(i / 4) * source.height / 3, this.cell, source.height / 3);
+    if (source.width !== FRUIT_ATLAS.width || source.height !== FRUIT_ATLAS.height) { this.callbacks.error(); return; }
+    FRUIT_SPRITES.forEach(([x, y, size], i) => atlas.add(i, 0, x, y, size, size));
 
     const shadow = this.textures.createCanvas('fruit-shadow', 128, 40);
     if (shadow) {
@@ -102,7 +100,7 @@ export class GardenScene extends Phaser.Scene {
     this.matter.add.rectangle(BOARD.right + 12, 320, 24, 600, { isStatic: true, friction: 0.12, restitution: 0.05, label: 'wall' });
     this.matter.add.rectangle(200, BOARD.floor + 16, 400, 32, { isStatic: true, friction: 0.15, restitution: 0.04, label: 'floor' });
     this.drawGarden();
-    this.guide = this.add.graphics().setDepth(0);
+    this.guide = this.add.graphics().setDepth(2);
     this.warning = this.add.graphics().setDepth(7);
     this.warningText = this.add.text(200, 122, '', { fontFamily: 'sans-serif', fontSize: '12px', color: '#b36d56', fontStyle: 'bold' }).setOrigin(0.5).setDepth(8);
     this.emptyText = this.add.text(200, 445, '一颗一颗，慢慢长大', { fontFamily: 'sans-serif', fontSize: '13px', color: '#c8c7b2', letterSpacing: 3 }).setOrigin(0.5).setDepth(0);
@@ -139,6 +137,14 @@ export class GardenScene extends Phaser.Scene {
     this.emptyText.setVisible(false);
     this.callbacks.ready();
     const canvas = this.game.canvas;
+    // Cancel an interrupted mobile gesture before Phaser translates it into pointerup.
+    const cancelGesture = () => { this.pointerId = null; };
+    canvas.addEventListener('touchcancel', cancelGesture, { capture: true });
+    canvas.addEventListener('pointercancel', cancelGesture, { capture: true });
+    this.events.once(Phaser.Scenes.Events.SHUTDOWN, () => {
+      canvas.removeEventListener('touchcancel', cancelGesture, true);
+      canvas.removeEventListener('pointercancel', cancelGesture, true);
+    });
     canvas.setAttribute('aria-label', '水果合成游戏。按住移动，松手落下；相同的水果碰到一起会合成。');
     canvas.setAttribute('role', 'img');
   }
@@ -177,11 +183,10 @@ export class GardenScene extends Phaser.Scene {
   }
 
   private makeArt(x: number, y: number, frame: number, radius: number): Phaser.GameObjects.Image {
-    const metric = METRICS[frame];
-    const size = this.cell;
+    const [, , size, ox, oy, diameter] = FRUIT_SPRITES[frame];
     return this.add.image(x, y, 'fruit-atlas', frame)
-      .setOrigin(metric[0] / 362, metric[1] / 362)
-      .setScale(radius * 2 / (metric[2] / 362 * size));
+      .setOrigin(ox / size, oy / size)
+      .setScale(radius * 2 / diameter);
   }
 
   private spawn(level: number, x: number, y: number, merged: boolean): Fruit {
@@ -199,6 +204,11 @@ export class GardenScene extends Phaser.Scene {
 
   start(snapshot?: SessionSnapshot, difficulty: Difficulty = DEFAULT_DIFFICULTY): void {
     if (this.phase === 'loading') return;
+    this.tweens.killAll();
+    this.tweens.resumeAll();
+    for (const effect of this.effects) effect.destroy();
+    this.effects.clear();
+    this.particleCount = 0;
     this.clearFruits();
     this.difficulty = snapshot?.difficulty ?? difficulty;
     this.phase = 'playing';
@@ -215,21 +225,24 @@ export class GardenScene extends Phaser.Scene {
     this.lastSave = 0;
     this.combo = 0;
     this.dropGate = null;
-    this.dangerMs = 0;
+    this.dangerMs = snapshot?.dangerMs ?? 0;
     this.dangerActive = false;
     this.pointerId = null;
     this.aimX = BOARD.width / 2;
     this.contacts = [];
+    this.history = new TurnHistory(snapshot?.undosLeft, snapshot?.previousTurn);
     this.cameras.main.resetFX();
     if (snapshot) for (const f of snapshot.fruits) {
       const fruit = this.spawn(f.level, f.x, f.y, false);
-      this.matter.body.setAngle(fruit.body, f.angle);
+      restoreFruit(fruit.body, f, this.matter.body);
+      fruit.born = -(f.age ?? 0);
     }
     this.preview?.setVisible(true);
     this.emptyText?.setVisible(this.drops === 0);
     this.callbacks.next(this.next);
     this.callbacks.score(this.score, this.highest);
     this.callbacks.danger(false);
+    this.emitTurn();
     this.audio.unlock();
     this.save();
   }
@@ -239,6 +252,8 @@ export class GardenScene extends Phaser.Scene {
     this.pointerId = null;
     this.phase = 'paused';
     this.accumulator = 0;
+    this.tweens.pauseAll();
+    this.emitTurn();
     this.save();
   }
 
@@ -247,15 +262,37 @@ export class GardenScene extends Phaser.Scene {
     this.phase = 'playing';
     this.accumulator = 0;
     this.pointerId = null;
+    this.tweens.resumeAll();
+    this.emitTurn();
     this.audio.unlock();
   }
 
   moveAim(delta: number): void { this.aimX = clampDropX(this.aimX + delta, this.current, this.difficulty); }
 
-  drop(): boolean {
+  private canDrop(): boolean {
     if (this.phase !== 'playing' || this.clock - this.lastDrop < 330) return false;
     const previous = this.dropGate === null ? undefined : this.fruits.get(this.dropGate);
-    if (previous && previous.body.position.y < 108 && this.clock - this.lastDrop < 750) return false;
+    return !(previous && previous.body.position.y < 108 && this.clock - this.lastDrop < 750);
+  }
+
+  private emitTurn(): void {
+    this.callbacks.turn({ current: this.current, drops: this.drops, canUndo: this.phase === 'playing' && !!this.history.previous && this.history.remaining > 0, undosLeft: this.history.remaining });
+  }
+
+  get undosLeft(): number { return this.history.remaining; }
+
+  undoDrop(): boolean {
+    if (this.phase !== 'playing') return false;
+    const previous = this.history.take();
+    if (!previous) return false;
+    this.start({ ...previous, undosLeft: this.history.remaining });
+    this.audio.undo();
+    return true;
+  }
+
+  drop(): boolean {
+    if (!this.canDrop()) return false;
+    this.history.remember(this.snapshotRound());
     const fruit = this.spawn(this.current, clampDropX(this.aimX, this.current, this.difficulty), BOARD.spawnY, false);
     if (this.current > this.highest) {
       this.highest = this.current;
@@ -268,6 +305,7 @@ export class GardenScene extends Phaser.Scene {
     this.next = randomLevel(this.random.next(), this.difficulty);
     this.aimX = clampDropX(this.aimX, this.current, this.difficulty);
     this.callbacks.next(this.next);
+    this.emitTurn();
     this.emptyText?.setVisible(false);
     this.audio.drop();
     this.save();
@@ -329,25 +367,31 @@ export class GardenScene extends Phaser.Scene {
     this.fruits.delete(fruit.body.id);
     this.matter.world.remove(fruit.body);
     fruit.shadow.destroy();
-    this.tweens.add({ targets: fruit.image, alpha: 0, scaleX: fruit.image.scaleX * 0.3, scaleY: fruit.image.scaleY * 0.3, duration: this.gentle ? 60 : 105, ease: 'Cubic.easeIn', onComplete: () => fruit.image.destroy() });
+    this.effects.add(fruit.image);
+    this.tweens.add({ targets: fruit.image, alpha: 0, scaleX: fruit.image.scaleX * 0.3, scaleY: fruit.image.scaleY * 0.3, duration: this.gentle ? 60 : 105, ease: 'Cubic.easeIn', onComplete: () => this.removeEffect(fruit.image) });
   }
+
+  private removeEffect(effect: Phaser.GameObjects.GameObject): void { this.effects.delete(effect); effect.destroy(); }
 
   private floatScore(x: number, y: number, points: number): void {
     const text = this.add.text(x, y - 12, `+${points}`, { fontFamily: 'Georgia, serif', fontSize: points >= 55 ? '25px' : '20px', fontStyle: 'bold', color: '#5b8056', stroke: '#fffdf3', strokeThickness: 4 }).setOrigin(0.5).setDepth(9);
-    this.tweens.add({ targets: text, y: y - (this.gentle ? 25 : 65), alpha: 0, duration: this.gentle ? 450 : 850, ease: 'Cubic.easeOut', onComplete: () => text.destroy() });
+    this.effects.add(text);
+    this.tweens.add({ targets: text, y: y - (this.gentle ? 25 : 65), alpha: 0, duration: this.gentle ? 450 : 850, ease: 'Cubic.easeOut', onComplete: () => this.removeEffect(text) });
   }
 
   private burst(x: number, y: number, color: number, radius: number, celebration: boolean): void {
     const count = this.gentle ? 3 : celebration ? 36 : 12;
     if (this.particleCount > 100) return;
     const ring = this.add.circle(x, y, radius * 0.3).setStrokeStyle(2, color, 0.6).setDepth(4);
-    this.tweens.add({ targets: ring, scale: 3.5, alpha: 0, duration: this.gentle ? 180 : 420, ease: 'Cubic.easeOut', onComplete: () => ring.destroy() });
+    this.effects.add(ring);
+    this.tweens.add({ targets: ring, scale: 3.5, alpha: 0, duration: this.gentle ? 180 : 420, ease: 'Cubic.easeOut', onComplete: () => this.removeEffect(ring) });
     for (let i = 0; i < count; i++) {
       const angle = Math.random() * Math.PI * 2;
       const distance = radius * (0.6 + Math.random() * (celebration ? 2.2 : 1));
       const p = this.add.ellipse(x, y, 3 + Math.random() * 4, 2 + Math.random() * 3, [color, 0xe8c77e, 0xffffff, 0xb0c49a][i % 4], 0.9).setDepth(8);
+      this.effects.add(p);
       this.particleCount++;
-      this.tweens.add({ targets: p, x: x + Math.cos(angle) * distance, y: y + Math.sin(angle) * distance + 18, alpha: 0, angle: Math.random() * 300, scale: 0.3, duration: 380 + Math.random() * 440, ease: 'Cubic.easeOut', onComplete: () => { p.destroy(); this.particleCount--; } });
+      this.tweens.add({ targets: p, x: x + Math.cos(angle) * distance, y: y + Math.sin(angle) * distance + 18, alpha: 0, angle: Math.random() * 300, scale: 0.3, duration: 380 + Math.random() * 440, ease: 'Cubic.easeOut', onComplete: () => { this.removeEffect(p); this.particleCount--; } });
     }
   }
 
@@ -360,13 +404,17 @@ export class GardenScene extends Phaser.Scene {
     this.fruits.clear();
   }
 
+  private snapshotRound(): RoundSnapshot {
+    return {
+      difficulty: this.difficulty, score: this.score, current: this.current, next: this.next, random: this.random.state,
+      drops: this.drops, highest: this.highest, dangerMs: this.dangerMs,
+      fruits: [...this.fruits.values()].map(f => saveFruit(f.body, f.level, this.clock - f.born)),
+    };
+  }
+
   save(): void {
     if (this.phase !== 'playing' && this.phase !== 'paused') return;
-    this.callbacks.save({
-      difficulty: this.difficulty, score: this.score, current: this.current, next: this.next, random: this.random.state,
-      drops: this.drops, highest: this.highest,
-      fruits: [...this.fruits.values()].map(f => ({ level: f.level, x: f.body.position.x, y: f.body.position.y, angle: f.body.angle })),
-    });
+    this.callbacks.save({ ...this.snapshotRound(), undosLeft: this.history.remaining, previousTurn: this.history.previous });
   }
 
   private drawGuide(): void {
@@ -375,19 +423,30 @@ export class GardenScene extends Phaser.Scene {
     if (this.phase !== 'playing' && this.phase !== 'paused') { this.preview.setVisible(false); return; }
     const radius = fruitRadius(this.current, this.difficulty);
     let landing = BOARD.floor - radius;
+    let target: Fruit | undefined;
     for (const fruit of this.fruits.values()) {
       const r = radius + fruitRadius(fruit.level, this.difficulty);
       const dx = this.aimX - fruit.body.position.x;
-      if (Math.abs(dx) < r) landing = Math.min(landing, fruit.body.position.y - Math.sqrt(r * r - dx * dx));
+      if (Math.abs(dx) < r) {
+        const surface = fruit.body.position.y - Math.sqrt(r * r - dx * dx);
+        if (surface < landing) { landing = surface; target = fruit; }
+      }
     }
-    const active = this.clock - this.lastDrop > 330;
+    const active = this.canDrop();
+    const match = target?.level === this.current && active;
+    if (landing > 100 && this.pointerId !== null) this.guide.fillStyle(0xaabf89, 0.08).fillRoundedRect(this.aimX - 4, 91, 8, landing - 94, 4);
+    if (target && match) {
+      const halo = fruitRadius(target.level, this.difficulty) + 5 + (this.gentle ? 0 : Math.sin(this.clock / 210) * 1.2);
+      this.guide.fillStyle(0xc6d69d, 0.3).fillCircle(target.body.position.x, target.body.position.y, halo);
+      this.guide.lineStyle(1.3, 0x8faa6d, 0.75).strokeCircle(target.body.position.x, target.body.position.y, halo);
+    }
     this.guide.fillStyle(0x94a17a, active ? 0.32 : 0.12);
     for (let y = 88; y < Math.max(90, landing - 5); y += 12) this.guide.fillCircle(this.aimX, y, 1.2);
-    if (landing > 100) this.guide.lineStyle(1, FRUITS[this.current].color, 0.2).strokeCircle(this.aimX, landing, radius);
-    const metric = METRICS[this.current];
-    this.preview.setVisible(true).setFrame(this.current).setOrigin(metric[0] / 362, metric[1] / 362)
+    if (landing > 100) this.guide.lineStyle(match ? 1.6 : 1, match ? 0x8faa6d : FRUITS[this.current].color, match ? 0.6 : 0.3).strokeCircle(this.aimX, landing, radius);
+    const [, , size, ox, oy, diameter] = FRUIT_SPRITES[this.current];
+    this.preview.setVisible(true).setFrame(this.current).setOrigin(ox / size, oy / size)
       .setPosition(this.aimX, BOARD.spawnY + (this.gentle ? 0 : Math.sin(this.clock / 600) * 2))
-      .setScale(radius * 2 / (metric[2] / 362 * this.cell)).setAlpha(active ? 1 : 0.35);
+      .setScale(radius * 2 / diameter).setAlpha(active ? 1 : 0.35);
   }
 
   private drawDanger(): void {
@@ -399,6 +458,7 @@ export class GardenScene extends Phaser.Scene {
     this.warning.lineStyle(active ? 1.8 : 1, active ? 0xcd8068 : 0xb0b696, alpha);
     for (let x = 37; x < 365; x += 12) this.warning.lineBetween(x, BOARD.danger, x + 6, BOARD.danger);
     if (active) {
+      this.warning.lineStyle(2, 0xcd8068, 0.55).lineBetween(37, BOARD.danger + 5, 37 + 328 * (1 - this.dangerMs / DIFFICULTIES[this.difficulty].dangerLimit), BOARD.danger + 5);
       this.warningText.setText(`留一点空间 · ${Math.max(0.1, (DIFFICULTIES[this.difficulty].dangerLimit - this.dangerMs) / 1000).toFixed(1)} 秒`).setAlpha(1);
     } else this.warningText.setText('');
   }
@@ -428,6 +488,8 @@ export class GardenScene extends Phaser.Scene {
           this.dangerMs = advanceDanger(this.dangerMs, overflowing, FIXED_STEP, this.difficulty);
           if (this.dangerMs >= DIFFICULTIES[this.difficulty].dangerLimit) {
             this.phase = 'over';
+            this.tweens.pauseAll();
+            this.emitTurn();
             this.pointerId = null;
             this.preview?.setVisible(false);
             this.guide?.clear();
@@ -444,9 +506,9 @@ export class GardenScene extends Phaser.Scene {
 
     for (const fruit of this.fruits.values()) {
       const { x, y } = fruit.body.position;
-      const metric = METRICS[fruit.level];
+      const diameter = FRUIT_SPRITES[fruit.level][5];
       const radius = fruitRadius(fruit.level, this.difficulty);
-      const baseScale = radius * 2 / (metric[2] / 362 * this.cell);
+      const baseScale = radius * 2 / diameter;
       const popTime = Math.min(1, Math.max(0, (this.clock - fruit.born) / 240));
       const pop = fruit.merged && !this.gentle ? Phaser.Math.Easing.Back.Out(popTime) : 1;
       const impactTime = (this.clock - fruit.impact) / 190;

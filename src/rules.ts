@@ -25,6 +25,7 @@ export const DROP_WEIGHTS = DIFFICULTIES.classic.dropWeights;
 export const DANGER_LIMIT = DIFFICULTIES.classic.dangerLimit;
 export const SPAWN_GRACE = 1400;
 export const FIXED_STEP = 1000 / 60;
+export const UNDO_LIMIT = 3;
 
 export function isDifficulty(value: unknown): value is Difficulty {
   return typeof value === 'string' && Object.hasOwn(DIFFICULTIES, value);
@@ -86,8 +87,8 @@ export function clampDropX(x: number, level: number, difficulty: Difficulty = DE
   return Math.max(BOARD.left + radius + 2, Math.min(BOARD.right - radius - 2, x));
 }
 
-export type FruitSnapshot = { level: number; x: number; y: number; angle: number };
-export type SessionSnapshot = {
+export type FruitSnapshot = { level: number; x: number; y: number; angle: number; vx?: number; vy?: number; spin?: number; age?: number };
+export type RoundSnapshot = {
   difficulty: Difficulty;
   score: number;
   current: number;
@@ -96,12 +97,36 @@ export type SessionSnapshot = {
   drops: number;
   highest: number;
   fruits: FruitSnapshot[];
+  dangerMs?: number;
 };
+export type SessionSnapshot = RoundSnapshot & { undosLeft?: number; previousTurn?: RoundSnapshot };
+
+const copyRound = (round: RoundSnapshot): RoundSnapshot => ({ ...round, fruits: round.fruits.map(fruit => ({ ...fruit })) });
+
+export class TurnHistory {
+  remaining: number;
+  previous?: RoundSnapshot;
+
+  constructor(remaining = UNDO_LIMIT, previous?: RoundSnapshot) {
+    this.remaining = remaining;
+    this.previous = remaining > 0 && previous ? copyRound(previous) : undefined;
+  }
+
+  remember(round: RoundSnapshot): void { this.previous = this.remaining > 0 ? copyRound(round) : undefined; }
+
+  take(): RoundSnapshot | undefined {
+    if (this.remaining <= 0 || !this.previous) return undefined;
+    const round = this.previous;
+    this.previous = undefined;
+    this.remaining--;
+    return round;
+  }
+}
 
 const finite = (value: unknown): value is number => typeof value === 'number' && Number.isFinite(value);
 const integer = (value: unknown, min: number, max: number): value is number => finite(value) && Number.isInteger(value) && value >= min && value <= max;
 
-export function validateSession(value: unknown): SessionSnapshot | null {
+function validateRound(value: unknown): RoundSnapshot | null {
   if (!value || typeof value !== 'object') return null;
   const s = value as Record<string, unknown>;
   // Saves made before difficulty selection belong to the original classic rules.
@@ -117,7 +142,37 @@ export function validateSession(value: unknown): SessionSnapshot | null {
     const f = raw as Record<string, unknown>;
     if (!integer(f.level, 0, 10) || !finite(f.x) || !finite(f.y) || !finite(f.angle)
       || f.x < -80 || f.x > BOARD.width + 80 || f.y < -100 || f.y > BOARD.height + 80 || Math.abs(f.angle) > 1e5) return null;
-    fruits.push({ level: f.level, x: clampDropX(f.x, f.level, difficulty), y: Math.min(f.y, BOARD.floor - fruitRadius(f.level, difficulty)), angle: f.angle });
+    const fruit: FruitSnapshot = { level: f.level, x: clampDropX(f.x, f.level, difficulty), y: Math.min(f.y, BOARD.floor - fruitRadius(f.level, difficulty)), angle: f.angle };
+    for (const field of ['vx', 'vy', 'spin', 'age'] as const) {
+      const motion = f[field];
+      if (motion === undefined) continue;
+      const limit = field === 'age' ? SPAWN_GRACE + FIXED_STEP : field === 'spin' ? 10 : 100;
+      if (!finite(motion) || Math.abs(motion) > limit || (field === 'age' && motion < 0)) return null;
+      fruit[field] = motion;
+    }
+    fruits.push(fruit);
   }
-  return { difficulty, score: s.score, current: s.current, next: s.next, random: s.random, drops: s.drops, highest: s.highest, fruits };
+  const round: RoundSnapshot = { difficulty, score: s.score, current: s.current, next: s.next, random: s.random, drops: s.drops, highest: s.highest, fruits };
+  if (s.dangerMs !== undefined) {
+    if (!finite(s.dangerMs) || s.dangerMs < 0 || s.dangerMs >= DIFFICULTIES[difficulty].dangerLimit) return null;
+    round.dangerMs = s.dangerMs;
+  }
+  return round;
+}
+
+export function validateSession(value: unknown): SessionSnapshot | null {
+  const round = validateRound(value);
+  if (!round) return null;
+  const raw = value as Record<string, unknown>;
+  const session: SessionSnapshot = { ...round };
+  if (raw.undosLeft !== undefined) {
+    if (!integer(raw.undosLeft, 0, UNDO_LIMIT)) return null;
+    session.undosLeft = raw.undosLeft;
+  }
+  if ((session.undosLeft ?? UNDO_LIMIT) > 0 && raw.previousTurn !== undefined) {
+    const previous = validateRound(raw.previousTurn);
+    // A broken undo slot must not destroy an otherwise healthy saved game.
+    if (previous && previous.difficulty === round.difficulty && previous.drops === round.drops - 1 && previous.score <= round.score) session.previousTurn = previous;
+  }
+  return session;
 }
