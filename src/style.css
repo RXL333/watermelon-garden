@@ -59,6 +59,30 @@ button .icon { flex-shrink: 0; }
 .intro-footnote { display: block; margin-top: 11px; font-size: 8px; color: #b1b19a; letter-spacing: .6px; }
 .loading-dot { width: 7px; height: 7px; border-radius: 50%; background: currentColor; animation: breathe .8s ease-in-out infinite alternate; }
 .intro .text-button { margin: 9px auto -5px; font-size: 10px; }
+.intro-difficulty { display: grid; grid-template-columns: repeat(3, 1fr); padding: 3px; gap: 3px; margin: -3px 0 5px; border: 1px solid #e4e8d6; border-radius: 13px; background: #f1f2e7; }
+.intro-difficulty button { min-height: 44px; padding: 4px 0; background: transparent; border-radius: 9px; color: #909b7d; font-size: 11px; letter-spacing: 1px; transition: background .2s, color .2s, box-shadow .2s; }
+.intro-difficulty button[aria-pressed="true"] { background: #fffdf5; color: #59754d; box-shadow: 0 2px 6px #455a3210; font-weight: 600; }
+.difficulty-note, .saved-mode { display: block; color: #939e82; font-size: 8px; line-height: 1.7; letter-spacing: .1px; margin: 0 0 12px; }
+.saved-mode { margin-top: -4px; }
+.mode-button { color: #758765; gap: 5px; }
+.mode-button > .icon { width: 13px; height: 13px; }
+.mode-chevron { color: #a1ac8d; font-size: 13px; margin-top: -4px; }
+.pause-difficulty { margin: 7px auto -10px; font-size: 10px; }
+.difficulty-intro { margin: 0 0 18px; color: #9ba28b; font-size: 11px; }
+.difficulty-options { display: grid; gap: 9px; }
+.difficulty-card { display: flex; align-items: center; gap: 8px; padding: 12px 9px; width: 100%; min-height: 87px; text-align: left; border-radius: 16px; border: 1px solid #e5e8d9; background: #f9f9ee; transition: border-color .2s, background .2s, box-shadow .2s; }
+.difficulty-card[aria-pressed="true"] { border-color: #95ac7b; background: #eff3e3; box-shadow: inset 0 0 0 1px #95ac7b40; }
+.difficulty-card .fruit-art { width: 48px; }
+.difficulty-card-copy { flex: 1; min-width: 0; }
+.difficulty-card-copy strong { display: flex; align-items: baseline; flex-wrap: wrap; gap: 7px; color: #5c7951; font-size: 15px; font-weight: 500; margin-bottom: 6px; }
+.difficulty-card-copy strong small { font-size: 9px; color: #8d9d79; font-weight: 400; }
+.difficulty-card-copy > span { display: block; font-size: 9px; line-height: 1.75; color: #8f987f; }
+.difficulty-card-copy > .difficulty-best { font-size: 8px; color: #a39f7a; margin-top: 3px; }
+.difficulty-check { display: flex; align-items: center; justify-content: center; width: 17px; height: 17px; flex-shrink: 0; border: 1px solid #d8dfc9; border-radius: 50%; color: transparent; }
+.difficulty-check .icon { width: 11px; height: 11px; stroke-width: 2; }
+.difficulty-card[aria-pressed="true"] .difficulty-check { background: #7e9b68; border-color: #7e9b68; color: white; }
+.difficulty-warning { font-size: 10px; color: #9b9e86; line-height: 1.8; margin: 17px 0; }
+.difficulty-cancel { margin: 5px 0 -8px; }
 .growth { flex: 0 0 auto; padding: 0 6px; }
 .growth-heading { display: flex; align-items: center; justify-content: space-between; gap: 10px; }
 .growth-heading > span { display: inline-flex; align-items: center; gap: 5px; font-size: 10px; color: #9ba086; letter-spacing: 1px; }
@@ -172,6 +196,8 @@ button .icon { flex-shrink: 0; }
   .intro-flourish { display: none; }
   .intro h2 { font-size: 22px; margin: 5px 0 7px; line-height: 1.25; }
   .intro p { font-size: 9px; line-height: 1.45; margin-bottom: 9px; }
+  .intro:has(.intro-difficulty) p { display: none; }
+  .difficulty-note { font-size: 7px; margin-bottom: 8px; }
   .intro:has(#fresh-start) p { display: none; }
   .intro .text-button { margin-top: 3px; }
   .intro-footnote { display: none; }
@@ -203,6 +229,8 @@ button .icon { flex-shrink: 0; }
   .intro { top: 18%; width: 200px; max-width: 78%; padding: 11px; }
   .intro h2 { font-size: 22px; margin: 6px 0; line-height: 1.25; }
   .intro p { font-size: 9px; line-height: 1.5; margin-bottom: 8px; }
+  .intro:has(.intro-difficulty) p { display: none; }
+  .difficulty-note { font-size: 7px; margin-bottom: 7px; }
   .intro-flourish { font-size: 7px; letter-spacing: 1px; }
   .intro-footnote { display: none; }
   .intro .primary-button { font-size: 10px; min-height: 36px; }

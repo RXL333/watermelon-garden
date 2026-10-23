@@ -1,5 +1,5 @@
 import Phaser from 'phaser';
-import { BOARD, FRUITS, FIXED_STEP, SPAWN_GRACE, DANGER_LIMIT, GardenRandom, randomLevel, selectMerges, advanceDanger, clampDropX, type Contact, type SessionSnapshot } from './rules.ts';
+import { BOARD, FRUITS, FIXED_STEP, SPAWN_GRACE, DIFFICULTIES, DEFAULT_DIFFICULTY, GardenRandom, randomLevel, fruitRadius, selectMerges, advanceDanger, clampDropX, type Difficulty, type Contact, type SessionSnapshot } from './rules.ts';
 import type { GardenAudio } from './audio.ts';
 
 export type Phase = 'loading' | 'intro' | 'playing' | 'paused' | 'over';
@@ -35,6 +35,7 @@ const METRICS = [
 export class GardenScene extends Phaser.Scene {
   phase: Phase = 'loading';
   gentle = false;
+  difficulty: Difficulty = DEFAULT_DIFFICULTY;
   score = 0;
   highest = 0;
   drops = 0;
@@ -114,15 +115,15 @@ export class GardenScene extends Phaser.Scene {
       if (this.phase !== 'playing' || this.pointerId !== null) return;
       this.audio.unlock();
       this.pointerId = pointer.id;
-      this.aimX = clampDropX(this.cameras.main.getWorldPoint(pointer.x, pointer.y).x, this.current);
+      this.aimX = clampDropX(this.cameras.main.getWorldPoint(pointer.x, pointer.y).x, this.current, this.difficulty);
     });
     this.input.on('pointermove', (pointer: Phaser.Input.Pointer) => {
-      if (this.phase === 'playing' && (this.pointerId === pointer.id || (!pointer.wasTouch && this.pointerId === null))) this.aimX = clampDropX(this.cameras.main.getWorldPoint(pointer.x, pointer.y).x, this.current);
+      if (this.phase === 'playing' && (this.pointerId === pointer.id || (!pointer.wasTouch && this.pointerId === null))) this.aimX = clampDropX(this.cameras.main.getWorldPoint(pointer.x, pointer.y).x, this.current, this.difficulty);
     });
     this.input.on('pointerup', (pointer: Phaser.Input.Pointer) => {
       if (this.pointerId !== pointer.id) return;
       this.pointerId = null;
-      this.aimX = clampDropX(this.cameras.main.getWorldPoint(pointer.x, pointer.y).x, this.current);
+      this.aimX = clampDropX(this.cameras.main.getWorldPoint(pointer.x, pointer.y).x, this.current, this.difficulty);
       this.drop();
     });
     this.input.on('pointerupoutside', () => { this.pointerId = null; });
@@ -184,7 +185,7 @@ export class GardenScene extends Phaser.Scene {
   }
 
   private spawn(level: number, x: number, y: number, merged: boolean): Fruit {
-    const radius = FRUITS[level].radius;
+    const radius = fruitRadius(level, this.difficulty);
     const body = this.matter.add.circle(x, y, radius, {
       restitution: 0.13, friction: 0.09, frictionStatic: 0.22, frictionAir: 0.006,
       density: 0.0014, slop: 0.03, sleepThreshold: 75, label: `fruit-${level}`,
@@ -196,9 +197,10 @@ export class GardenScene extends Phaser.Scene {
     return fruit;
   }
 
-  start(snapshot?: SessionSnapshot): void {
+  start(snapshot?: SessionSnapshot, difficulty: Difficulty = DEFAULT_DIFFICULTY): void {
     if (this.phase === 'loading') return;
     this.clearFruits();
+    this.difficulty = snapshot?.difficulty ?? difficulty;
     this.phase = 'playing';
     this.clock = 0;
     this.accumulator = 0;
@@ -248,19 +250,23 @@ export class GardenScene extends Phaser.Scene {
     this.audio.unlock();
   }
 
-  moveAim(delta: number): void { this.aimX = clampDropX(this.aimX + delta, this.current); }
+  moveAim(delta: number): void { this.aimX = clampDropX(this.aimX + delta, this.current, this.difficulty); }
 
   drop(): boolean {
     if (this.phase !== 'playing' || this.clock - this.lastDrop < 330) return false;
     const previous = this.dropGate === null ? undefined : this.fruits.get(this.dropGate);
     if (previous && previous.body.position.y < 108 && this.clock - this.lastDrop < 750) return false;
-    const fruit = this.spawn(this.current, clampDropX(this.aimX, this.current), BOARD.spawnY, false);
+    const fruit = this.spawn(this.current, clampDropX(this.aimX, this.current, this.difficulty), BOARD.spawnY, false);
+    if (this.current > this.highest) {
+      this.highest = this.current;
+      this.callbacks.score(this.score, this.highest);
+    }
     this.dropGate = fruit.body.id;
     this.lastDrop = this.clock;
     this.drops++;
     this.current = this.next;
-    this.next = randomLevel(this.random.next());
-    this.aimX = clampDropX(this.aimX, this.current);
+    this.next = randomLevel(this.random.next(), this.difficulty);
+    this.aimX = clampDropX(this.aimX, this.current, this.difficulty);
     this.callbacks.next(this.next);
     this.emptyText?.setVisible(false);
     this.audio.drop();
@@ -294,8 +300,8 @@ export class GardenScene extends Phaser.Scene {
     this.lastMerge = this.clock;
     let gained: number;
     if (level < FRUITS.length) {
-      const radius = FRUITS[level].radius;
-      const fruit = this.spawn(level, clampDropX(x, level), Math.min(y, BOARD.floor - radius), true);
+      const radius = fruitRadius(level, this.difficulty);
+      const fruit = this.spawn(level, clampDropX(x, level, this.difficulty), Math.min(y, BOARD.floor - radius), true);
       this.matter.body.setVelocity(fruit.body, velocity);
       this.highest = Math.max(this.highest, level);
       gained = FRUITS[level].points;
@@ -357,7 +363,7 @@ export class GardenScene extends Phaser.Scene {
   save(): void {
     if (this.phase !== 'playing' && this.phase !== 'paused') return;
     this.callbacks.save({
-      score: this.score, current: this.current, next: this.next, random: this.random.state,
+      difficulty: this.difficulty, score: this.score, current: this.current, next: this.next, random: this.random.state,
       drops: this.drops, highest: this.highest,
       fruits: [...this.fruits.values()].map(f => ({ level: f.level, x: f.body.position.x, y: f.body.position.y, angle: f.body.angle })),
     });
@@ -367,10 +373,10 @@ export class GardenScene extends Phaser.Scene {
     if (!this.guide || !this.preview) return;
     this.guide.clear();
     if (this.phase !== 'playing' && this.phase !== 'paused') { this.preview.setVisible(false); return; }
-    const radius = FRUITS[this.current].radius;
+    const radius = fruitRadius(this.current, this.difficulty);
     let landing = BOARD.floor - radius;
     for (const fruit of this.fruits.values()) {
-      const r = radius + FRUITS[fruit.level].radius;
+      const r = radius + fruitRadius(fruit.level, this.difficulty);
       const dx = this.aimX - fruit.body.position.x;
       if (Math.abs(dx) < r) landing = Math.min(landing, fruit.body.position.y - Math.sqrt(r * r - dx * dx));
     }
@@ -393,7 +399,7 @@ export class GardenScene extends Phaser.Scene {
     this.warning.lineStyle(active ? 1.8 : 1, active ? 0xcd8068 : 0xb0b696, alpha);
     for (let x = 37; x < 365; x += 12) this.warning.lineBetween(x, BOARD.danger, x + 6, BOARD.danger);
     if (active) {
-      this.warningText.setText(`留一点空间 · ${Math.max(1, Math.ceil((DANGER_LIMIT - this.dangerMs) / 1000))}`).setAlpha(1);
+      this.warningText.setText(`留一点空间 · ${Math.max(0.1, (DIFFICULTIES[this.difficulty].dangerLimit - this.dangerMs) / 1000).toFixed(1)} 秒`).setAlpha(1);
     } else this.warningText.setText('');
   }
 
@@ -417,10 +423,10 @@ export class GardenScene extends Phaser.Scene {
           }
           let overflowing = false;
           for (const fruit of this.fruits.values()) {
-            if (this.clock - fruit.born > SPAWN_GRACE && fruit.body.position.y - FRUITS[fruit.level].radius < BOARD.danger) overflowing = true;
+            if (this.clock - fruit.born > SPAWN_GRACE && fruit.body.position.y - fruitRadius(fruit.level, this.difficulty) < BOARD.danger) overflowing = true;
           }
-          this.dangerMs = advanceDanger(this.dangerMs, overflowing, FIXED_STEP);
-          if (this.dangerMs >= DANGER_LIMIT) {
+          this.dangerMs = advanceDanger(this.dangerMs, overflowing, FIXED_STEP, this.difficulty);
+          if (this.dangerMs >= DIFFICULTIES[this.difficulty].dangerLimit) {
             this.phase = 'over';
             this.pointerId = null;
             this.preview?.setVisible(false);
@@ -439,7 +445,7 @@ export class GardenScene extends Phaser.Scene {
     for (const fruit of this.fruits.values()) {
       const { x, y } = fruit.body.position;
       const metric = METRICS[fruit.level];
-      const radius = FRUITS[fruit.level].radius;
+      const radius = fruitRadius(fruit.level, this.difficulty);
       const baseScale = radius * 2 / (metric[2] / 362 * this.cell);
       const popTime = Math.min(1, Math.max(0, (this.clock - fruit.born) / 240));
       const pop = fruit.merged && !this.gentle ? Phaser.Math.Easing.Back.Out(popTime) : 1;

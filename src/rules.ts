@@ -13,19 +13,36 @@ export const FRUITS = [
   { name: '西瓜', radius: 80, points: 66, color: 0x6f9e71 },
 ] as const;
 
-export const DROP_WEIGHTS = [35, 28, 20, 12, 5] as const;
-export const DANGER_LIMIT = 2000;
+export const DIFFICULTIES = {
+  easy: { name: '轻松', subtitle: '慢慢种，慢慢长大', radiusScale: 0.88, dangerLimit: 3000, dropWeights: [38, 30, 22, 10] },
+  classic: { name: '经典', subtitle: '刚刚好的小挑战', radiusScale: 1, dangerLimit: 2000, dropWeights: [35, 28, 20, 12, 5] },
+  hard: { name: '挑战', subtitle: '给合成高手的花园', radiusScale: 1.08, dangerLimit: 1200, dropWeights: [33, 26, 19, 12, 7, 3] },
+} as const;
+export type Difficulty = keyof typeof DIFFICULTIES;
+export const DIFFICULTY_IDS: readonly Difficulty[] = ['easy', 'classic', 'hard'];
+export const DEFAULT_DIFFICULTY: Difficulty = 'classic';
+export const DROP_WEIGHTS = DIFFICULTIES.classic.dropWeights;
+export const DANGER_LIMIT = DIFFICULTIES.classic.dangerLimit;
 export const SPAWN_GRACE = 1400;
 export const FIXED_STEP = 1000 / 60;
 
-export function randomLevel(value: number): number {
+export function isDifficulty(value: unknown): value is Difficulty {
+  return typeof value === 'string' && Object.hasOwn(DIFFICULTIES, value);
+}
+
+export function fruitRadius(level: number, difficulty: Difficulty = DEFAULT_DIFFICULTY): number {
+  return FRUITS[level].radius * DIFFICULTIES[difficulty].radiusScale;
+}
+
+export function randomLevel(value: number, difficulty: Difficulty = DEFAULT_DIFFICULTY): number {
+  const weights = DIFFICULTIES[difficulty].dropWeights;
   const target = Math.max(0, Math.min(0.999999999, value)) * 100;
   let sum = 0;
-  for (let level = 0; level < DROP_WEIGHTS.length; level++) {
-    sum += DROP_WEIGHTS[level];
+  for (let level = 0; level < weights.length; level++) {
+    sum += weights[level];
     if (target < sum) return level;
   }
-  return 4;
+  return weights.length - 1;
 }
 
 export class GardenRandom {
@@ -60,17 +77,18 @@ export function selectMerges(contacts: Contact[], lookup: (id: number) => Mergea
   return selected;
 }
 
-export function advanceDanger(previous: number, overflow: boolean, delta: number): number {
-  return overflow ? Math.min(DANGER_LIMIT, previous + Math.max(0, delta)) : 0;
+export function advanceDanger(previous: number, overflow: boolean, delta: number, difficulty: Difficulty = DEFAULT_DIFFICULTY): number {
+  return overflow ? Math.min(DIFFICULTIES[difficulty].dangerLimit, previous + Math.max(0, delta)) : 0;
 }
 
-export function clampDropX(x: number, level: number): number {
-  const radius = FRUITS[level].radius;
+export function clampDropX(x: number, level: number, difficulty: Difficulty = DEFAULT_DIFFICULTY): number {
+  const radius = fruitRadius(level, difficulty);
   return Math.max(BOARD.left + radius + 2, Math.min(BOARD.right - radius - 2, x));
 }
 
 export type FruitSnapshot = { level: number; x: number; y: number; angle: number };
 export type SessionSnapshot = {
+  difficulty: Difficulty;
   score: number;
   current: number;
   next: number;
@@ -86,7 +104,11 @@ const integer = (value: unknown, min: number, max: number): value is number => f
 export function validateSession(value: unknown): SessionSnapshot | null {
   if (!value || typeof value !== 'object') return null;
   const s = value as Record<string, unknown>;
-  if (!integer(s.score, 0, 1e9) || !integer(s.current, 0, 4) || !integer(s.next, 0, 4)
+  // Saves made before difficulty selection belong to the original classic rules.
+  const difficulty = s.difficulty === undefined ? DEFAULT_DIFFICULTY : s.difficulty;
+  if (!isDifficulty(difficulty)) return null;
+  const lastDropLevel = DIFFICULTIES[difficulty].dropWeights.length - 1;
+  if (!integer(s.score, 0, 1e9) || !integer(s.current, 0, lastDropLevel) || !integer(s.next, 0, lastDropLevel)
     || !integer(s.random, 0, 0xffffffff) || !integer(s.drops, 0, 1e7) || !integer(s.highest, 0, 10)
     || !Array.isArray(s.fruits) || s.fruits.length > 240) return null;
   const fruits: FruitSnapshot[] = [];
@@ -95,7 +117,7 @@ export function validateSession(value: unknown): SessionSnapshot | null {
     const f = raw as Record<string, unknown>;
     if (!integer(f.level, 0, 10) || !finite(f.x) || !finite(f.y) || !finite(f.angle)
       || f.x < -80 || f.x > BOARD.width + 80 || f.y < -100 || f.y > BOARD.height + 80 || Math.abs(f.angle) > 1e5) return null;
-    fruits.push({ level: f.level, x: clampDropX(f.x, f.level), y: Math.min(f.y, BOARD.floor - FRUITS[f.level].radius), angle: f.angle });
+    fruits.push({ level: f.level, x: clampDropX(f.x, f.level, difficulty), y: Math.min(f.y, BOARD.floor - fruitRadius(f.level, difficulty)), angle: f.angle });
   }
-  return { score: s.score, current: s.current, next: s.next, random: s.random, drops: s.drops, highest: s.highest, fruits };
+  return { difficulty, score: s.score, current: s.current, next: s.next, random: s.random, drops: s.drops, highest: s.highest, fruits };
 }
