@@ -1,0 +1,13 @@
+{
+  "id": "./",
+  "name": "西瓜小院",
+  "short_name": "西瓜小院",
+  "description": "一颗一颗，慢慢收获好心情。",
+  "start_url": "./",
+  "scope": "./",
+  "display": "standalone",
+  "orientation": "portrait-primary",
+  "background_color": "#f9f6ec",
+  "theme_color": "#f9f6ec",
+  "icons": [{ "src": "./icon.svg", "sizes": "any", "type": "image/svg+xml", "purpose": "any" }]
+}
