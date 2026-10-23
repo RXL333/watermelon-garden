@@ -1,3 +1,5 @@
+import { growthScale } from './physics.ts';
+
 export const BOARD = { width: 400, height: 560, left: 24, right: 376, floor: 536, danger: 142, spawnY: 64 } as const;
 export const FRUITS = [
   { name: '葡萄', radius: 11, points: 1, color: 0x9873b6 },
@@ -87,7 +89,7 @@ export function clampDropX(x: number, level: number, difficulty: Difficulty = DE
   return Math.max(BOARD.left + radius + 2, Math.min(BOARD.right - radius - 2, x));
 }
 
-export type FruitSnapshot = { level: number; x: number; y: number; angle: number; vx?: number; vy?: number; spin?: number; age?: number };
+export type FruitSnapshot = { level: number; x: number; y: number; angle: number; vx?: number; vy?: number; spin?: number; age?: number; growth?: number };
 export type RoundSnapshot = {
   difficulty: Difficulty;
   score: number;
@@ -149,6 +151,13 @@ function validateRound(value: unknown): RoundSnapshot | null {
       const limit = field === 'age' ? SPAWN_GRACE + FIXED_STEP : field === 'spin' ? 10 : 100;
       if (!finite(motion) || Math.abs(motion) > limit || (field === 'age' && motion < 0)) return null;
       fruit[field] = motion;
+    }
+    if (f.growth !== undefined) {
+      if (!finite(f.growth) || f.growth < 0 || f.growth > 1) return null;
+      fruit.growth = f.growth;
+      const radius = fruitRadius(f.level, difficulty) * growthScale(f.growth);
+      fruit.x = Math.max(BOARD.left + radius + 2, Math.min(BOARD.right - radius - 2, f.x));
+      fruit.y = Math.min(f.y, BOARD.floor - radius);
     }
     fruits.push(fruit);
   }

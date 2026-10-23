@@ -27,6 +27,10 @@ export function mountQA(scene: GardenScene, start: (snapshot: SessionSnapshot) =
     return { ...snapshot(fruits, 10), dangerMs: DIFFICULTIES[scene.difficulty].dangerLimit - 250 };
   };
   const cases: [string, () => SessionSnapshot][] = [
+    ['上下联动', () => ({ ...snapshot(Array.from({ length: 15 }, (_, i) => {
+      const level = [3, 5, 4, 6, 2][(i % 3 + Math.floor(i / 3) * 2) % 5];
+      return { level, x: 80 + i % 3 * 120, y: BOARD.floor - fruitRadius(level, scene.difficulty) - Math.floor(i / 3) * 70, angle: 0 };
+    }), 6), current: 2, next: 2 })],
     ['撤回试种', () => snapshot(touching(0, 1))],
     ['柠檬与菠萝', () => snapshot([{ level: 4, x: 120, y: BOARD.floor - fruitRadius(4, scene.difficulty), angle: 0 }, { level: 8, x: 270, y: BOARD.floor - fruitRadius(8, scene.difficulty), angle: 0 }], 8)],
     ['三果碰撞', () => snapshot(touching(0, 3))],
