@@ -315,3 +315,48 @@ button .icon { flex-shrink: 0; }
 @media (prefers-reduced-motion: reduce) {
   *, *::before, *::after { animation-duration: .01ms !important; animation-iteration-count: 1 !important; transition-duration: .01ms !important; scroll-behavior: auto !important; }
 }
+
+.playing-hint { flex-basis: 44px; justify-content: flex-start; }
+#hint { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.history-entry { flex-shrink: 0; min-height: 44px; gap: 4px; margin-left: 4px; padding: 0 3px; font-size: 10px; color: #7d906b; }
+.history-entry .icon { width: 15px; height: 15px; }
+.pause-history { margin: 8px auto -8px; font-size: 10px; }
+.garden-dialog[data-view="history"] { width: min(calc(100% - 28px), 420px); padding: 25px 19px 18px; overflow: hidden; }
+.garden-dialog[data-view="history"] #dialog-content { display: flex; flex-direction: column; max-height: calc(100dvh - 100px - env(safe-area-inset-top) - env(safe-area-inset-bottom)); }
+.garden-dialog[data-view="history"] #dialog-content > :not(.history-scroll) { flex-shrink: 0; }
+.history-intro { margin: 0 0 17px; font-size: 11px; color: #98a187; }
+.history-summary { display: grid; grid-template-columns: 1fr 1fr; padding: 14px 10px; margin-bottom: 14px; border: 1px solid #e5e8d6; background: #f4f5e7; border-radius: 17px; }
+.history-summary > div + div { border-left: 1px solid #e0e5d0; }
+.history-summary small { display: block; color: #9ca78a; font-size: 9px; margin-bottom: 6px; letter-spacing: 1px; }
+.history-summary strong { font-family: Georgia, serif; font-size: 27px; font-weight: 400; color: #6c8956; font-variant-numeric: tabular-nums; }
+.history-summary strong span { font-family: sans-serif; font-size: 9px; color: #9ca783; }
+.history-filters { display: grid; grid-template-columns: repeat(4, 1fr); gap: 4px; padding: 3px; margin-bottom: 12px; background: #f0f2e5; border-radius: 12px; }
+.history-filters button { min-height: 44px; border-radius: 9px; background: transparent; color: #99a389; font-size: 11px; }
+.history-filters button[aria-pressed="true"] { background: #fffdf5; color: #5d7a4e; box-shadow: 0 2px 5px #53643b0d; }
+.history-scroll { overflow-y: auto; min-height: 0; overscroll-behavior: contain; scrollbar-width: thin; scrollbar-color: #c5cfb4 transparent; padding: 1px 3px; margin: 0 -3px; }
+.history-list { display: grid; gap: 8px; list-style: none; margin: 0; padding: 0; }
+.history-card { display: flex; align-items: center; gap: 10px; padding: 13px 11px; background: #faf9ef; border: 1px solid #e9eadb; border-radius: 15px; text-align: left; }
+.history-card.is-ongoing { background: #eff3e4; border-color: #d8e2c5; }
+.history-fruit { flex: 0 0 46px; display: flex; align-items: center; justify-content: center; width: 46px; height: 52px; background: radial-gradient(ellipse, #e8edd6a8, transparent 73%); }
+.history-fruit .fruit-art { width: 47px; }
+.history-card-copy { min-width: 0; flex: 1; }
+.history-card-heading { display: flex; align-items: baseline; justify-content: space-between; gap: 6px; }
+.history-card-heading strong { font-family: Georgia, serif; font-size: 25px; font-weight: 400; color: #607e51; font-variant-numeric: tabular-nums; }
+.history-card-heading strong small { font-family: sans-serif; font-size: 9px; color: #a1ab8d; }
+.history-card-heading > span { flex-shrink: 0; font-size: 8px; color: #92a17c; background: #edf0e1; padding: 4px 5px; border-radius: 5px; }
+.history-card-copy p { font-size: 9px; line-height: 1.6; margin: 4px 0 3px; color: #9ba38b; }
+.history-card-copy > small { font-size: 8px; color: #a7ae96; }
+.history-empty { display: flex; flex-direction: column; align-items: center; padding: 27px 5px 20px; color: #a3af8e; }
+.history-empty > .icon { width: 35px; height: 35px; stroke-width: 1.1; margin-bottom: 14px; fill: #e6ecd5; }
+.history-empty strong { font-size: 14px; font-weight: 400; letter-spacing: 1px; }
+.history-empty p { font-size: 10px; line-height: 1.9; margin: 9px 0 0; color: #b0b49f; }
+.history-more { width: 100%; margin: 5px 0 0; font-size: 10px; }
+.history-note { margin: 14px 0 11px; font-size: 8px; color: #a3aa93; line-height: 1.6; }
+@media (max-height: 620px) and (orientation: portrait) {
+  .garden-dialog[data-view="history"] { padding-top: 18px; }
+  .history-intro { margin-bottom: 10px; font-size: 10px; }
+  .history-summary { padding: 9px; margin-bottom: 9px; }
+  .history-summary strong { font-size: 23px; }
+  .history-filters { margin-bottom: 8px; }
+  .history-note { margin: 10px 0 8px; }
+}

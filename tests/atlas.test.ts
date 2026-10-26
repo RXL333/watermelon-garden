@@ -2,7 +2,10 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
 import { inflateSync } from 'node:zlib';
+import { createRequire } from 'node:module';
+import { createFruitBody } from '../src/fruit-body.ts';
 import { FRUIT_STYLES, FRUIT_STYLE_IDS } from '../src/fruit-art.ts';
+import { fruitRadius } from '../src/rules.ts';
 
 // Read PNG alpha directly, so the source-art boundary check also runs in CI.
 function pngAlpha(path: URL) {
@@ -36,8 +39,13 @@ function pngAlpha(path: URL) {
       pixels[y * stride + x] = (raw[y * (stride + 1) + x + 1] + prediction) & 255;
     }
   }
-  return { width, height, alpha: (x: number, y: number) => pixels[y * stride + x * 4 + 3] };
+  return { width, height, alpha: (x: number, y: number) => pixels[y * stride + x * 4 + 3], rgba: (x: number, y: number) => pixels.subarray(y * stride + x * 4, y * stride + x * 4 + 4) };
 }
+
+const require = createRequire(import.meta.url);
+const Body = require('phaser/src/physics/matter-js/lib/body/Body.js');
+const Bodies = require('phaser/src/physics/matter-js/lib/factory/Bodies.js');
+const Query = require('phaser/src/physics/matter-js/lib/collision/Query.js');
 
 for (const id of FRUIT_STYLE_IDS) test(`${id}: every fruit, crown and stem stays in its own cell and fully inside its shared UI/game crop`, () => {
   const { atlas, sprites } = FRUIT_STYLES[id];
@@ -48,6 +56,26 @@ for (const id of FRUIT_STYLE_IDS) test(`${id}: every fruit, crown and stem stays
   const cell = atlas.width / 4;
   assert.equal(atlas.height / 3, cell);
   assert.ok(atlas.gutter >= 8);
+  const visibleHeight = (level: number) => {
+    const [x, y, size, , , diameter] = sprites[level];
+    let top = y + size, bottom = y;
+    for (let py = y; py < y + size; py++) for (let px = x; px < x + size; px++) if (png.alpha(px, py) > 32) { top = Math.min(top, py); bottom = Math.max(bottom, py); }
+    return (bottom - top + 1) * fruitRadius(level) * 2 / diameter;
+  };
+  assert.ok(visibleHeight(8) < visibleHeight(10), 'the WHOLE pineapple, including leaves, is shorter than the watermelon');
+  const pineapple = createFruitBody(8, 0, 0, fruitRadius(8), id, { circle: Bodies.circle, create: Body.create, setCentre: Body.setCentre });
+  const [pineX, pineY, pineSize, originX, originY, pineDiameter] = sprites[8];
+  const pineScale = fruitRadius(8) * 2 / pineDiameter;
+  let leafPixels = 0, coveredLeaves = 0;
+  for (let y = pineY; y < pineY + originY - pineDiameter * .2; y += 2) for (let x = pineX; x < pineX + pineSize; x += 2) {
+    const [r, g, b, alpha] = png.rgba(x, y);
+    if (alpha < 160 || g < r * 1.04 || g < b * 1.15) continue;
+    leafPixels++;
+    const point = { x: (x - pineX - originX) * pineScale, y: (y - pineY - originY) * pineScale };
+    if (Query.point([pineapple], point).length) coveredLeaves++;
+  }
+  assert.ok(leafPixels > 100, 'visible green crown pixels were sampled');
+  assert.ok(coveredLeaves / leafPixels > .98, `leaf collider covers the actual crown: ${coveredLeaves}/${leafPixels}`);
   sprites.forEach(([x, y, size, ox, oy, diameter], i) => {
     const left = i % 4 * cell, top = Math.floor(i / 4) * cell;
     assert.ok(x >= left && x + size <= left + cell && y >= top && y + size <= top + cell, `crop ${i} stays in cell`);

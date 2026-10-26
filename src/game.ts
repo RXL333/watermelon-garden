@@ -1,8 +1,9 @@
 import Phaser from 'phaser';
 import { BOARD, FRUITS, FIXED_STEP, SPAWN_GRACE, DIFFICULTIES, DEFAULT_DIFFICULTY, GardenRandom, TurnHistory, randomLevel, fruitRadius, selectMerges, advanceDanger, clampDropX, type Difficulty, type Contact, type RoundSnapshot, type SessionSnapshot } from './rules.ts';
 import { saveFruit, restoreFruit } from './physics-state.ts';
+import { createFruitBody, fruitBodyRadius, fruitParent, landingOnBody, PINEAPPLE_LEVEL } from './fruit-body.ts';
 import { DEFAULT_FRUIT_STYLE, FRUIT_STYLES, type FruitStyleId } from './fruit-art.ts';
-import { FRUIT_MATERIAL, PHYSICS_ENGINE, GROWTH_DURATION, growthScale, growBody, applyMergePressure, wakePile, type SleepingAPI } from './physics.ts';
+import { PHYSICS_ENGINE, GROWTH_DURATION, growthScale, growBody, applyMergePressure, wakePile, type SleepingAPI } from './physics.ts';
 import type { GardenAudio } from './audio.ts';
 
 export type Phase = 'loading' | 'intro' | 'playing' | 'paused' | 'over';
@@ -69,6 +70,7 @@ export class GardenScene extends Phaser.Scene {
   private effects = new Set<Phaser.GameObjects.GameObject>();
   private lastWake = -1000;
   private styleLoads = new Map<FruitStyleId, Promise<void>>();
+  private styleChangedShape = false;
 
   constructor(callbacks: GardenCallbacks, audio: GardenAudio, pixelRatio: number, style: FruitStyleId) {
     super('garden');
@@ -233,7 +235,7 @@ export class GardenScene extends Phaser.Scene {
     const images = new Set([...this.fruits.values()].map(fruit => fruit.image));
     if (this.preview) images.add(this.preview);
     for (const effect of this.effects) if (effect instanceof Phaser.GameObjects.Image && typeof effect.getData('fruitLevel') === 'number') images.add(effect);
-    // Change images only. The live bodies, motion, RNG, score and undo history stay intact.
+    // Keep motion and the round intact; only the pineapple's leaf outline follows its artwork.
     for (const image of images) {
       const level = image.getData('fruitLevel') as number;
       const [, , size, ox, oy, diameter] = next.sprites[level];
@@ -241,7 +243,26 @@ export class GardenScene extends Phaser.Scene {
       const scaleX = image.scaleX * ratio, scaleY = image.scaleY * ratio;
       image.setTexture(this.artKey(style), level).setOrigin(ox / size, oy / size).setScale(scaleX, scaleY);
     }
+    const replacements = new Map<number, number>();
+    for (const [id, fruit] of this.fruits) if (fruit.level === PINEAPPLE_LEVEL) {
+      const previousBody = fruit.body;
+      const body = createFruitBody(fruit.level, previousBody.position.x, previousBody.position.y, fruitBodyRadius(previousBody), style, {
+        circle: this.matter.bodies.circle, create: this.matter.body.create, setCentre: this.matter.body.setCentre,
+      });
+      restoreFruit(body, saveFruit(previousBody, fruit.level, this.clock - fruit.born), this.matter.body);
+      body.force.x = previousBody.force.x; body.force.y = previousBody.force.y; body.torque = previousBody.torque;
+      sleeping.set(body, previousBody.isSleeping);
+      this.matter.world.remove(previousBody);
+      this.matter.world.add(body);
+      fruit.body = body;
+      replacements.set(id, body.id);
+      if (this.dropGate === id) this.dropGate = body.id;
+    }
+    if (replacements.size) this.fruits = new Map([...this.fruits].map(([id, fruit]) => [replacements.get(id) ?? id, fruit]));
+    this.styleChangedShape = replacements.size > 0;
+    this.contacts = [];
     this.fruitStyle = style;
+    this.save();
   }
 
   private makeArt(x: number, y: number, frame: number, radius: number): Phaser.GameObjects.Image {
@@ -253,9 +274,10 @@ export class GardenScene extends Phaser.Scene {
 
   private spawn(level: number, x: number, y: number, merged: boolean, growth = 0): Fruit {
     const radius = fruitRadius(level, this.difficulty) * (merged ? growthScale(growth) : 1);
-    const body = this.matter.add.circle(x, y, radius, {
-      ...FRUIT_MATERIAL, label: `fruit-${level}`,
-    }, Math.max(18, Math.ceil(radius / 2)));
+    const body = createFruitBody(level, x, y, radius, this.fruitStyle, {
+      circle: this.matter.bodies.circle, create: this.matter.body.create, setCentre: this.matter.body.setCentre,
+    });
+    this.matter.world.add(body);
     const image = this.makeArt(x, y, level, radius).setDepth(3);
     const shadow = this.add.image(x, y + radius * 0.76, 'fruit-shadow').setDisplaySize(radius * 2.4, radius * 0.7).setAlpha(0.6).setDepth(1);
     const fruit = { body, image, shadow, level, born: this.clock, impact: -1000, merged };
@@ -285,6 +307,7 @@ export class GardenScene extends Phaser.Scene {
     this.lastMerge = -5000;
     this.lastSave = 0;
     this.lastWake = -1000;
+    this.styleChangedShape = false;
     this.combo = 0;
     this.dropGate = null;
     this.dangerMs = snapshot?.dangerMs ?? 0;
@@ -325,6 +348,7 @@ export class GardenScene extends Phaser.Scene {
     this.accumulator = 0;
     this.pointerId = null;
     this.tweens.resumeAll();
+    if (this.styleChangedShape) { this.wake(true); this.styleChangedShape = false; }
     this.emitTurn();
     this.audio.unlock();
   }
@@ -384,8 +408,8 @@ export class GardenScene extends Phaser.Scene {
   private collide(event: Collision, impact: boolean): void {
     if (this.phase !== 'playing' && this.phase !== 'intro') return;
     for (const pair of event.pairs) {
-      const a = this.fruits.get(pair.bodyA.id);
-      const b = this.fruits.get(pair.bodyB.id);
+      const a = this.fruits.get(fruitParent(pair.bodyA).id);
+      const b = this.fruits.get(fruitParent(pair.bodyB).id);
       if (this.phase === 'playing' && a && b && a.level === b.level) this.contacts.push([a.body.id, b.body.id]);
       if (impact) for (const f of [a, b]) {
         if (f && f.body.speed > 1.3 && this.clock - f.impact > 180) {
@@ -501,18 +525,14 @@ export class GardenScene extends Phaser.Scene {
     let landing = BOARD.floor - radius;
     let target: Fruit | undefined;
     for (const fruit of this.fruits.values()) {
-      const r = radius + fruit.body.circleRadius;
-      const dx = this.aimX - fruit.body.position.x;
-      if (Math.abs(dx) < r) {
-        const surface = fruit.body.position.y - Math.sqrt(r * r - dx * dx);
-        if (surface < landing) { landing = surface; target = fruit; }
-      }
+      const surface = landingOnBody(fruit.body, this.aimX, radius);
+      if (surface < landing) { landing = surface; target = fruit; }
     }
     const active = this.canDrop();
     const match = target?.level === this.current && active;
     if (landing > 100 && this.pointerId !== null) this.guide.fillStyle(0xaabf89, 0.08).fillRoundedRect(this.aimX - 4, 91, 8, landing - 94, 4);
     if (target && match) {
-      const halo = target.body.circleRadius + 5 + (this.gentle ? 0 : Math.sin(this.clock / 210) * 1.2);
+      const halo = fruitBodyRadius(target.body) + 5 + (this.gentle ? 0 : Math.sin(this.clock / 210) * 1.2);
       this.guide.fillStyle(0xc6d69d, 0.3).fillCircle(target.body.position.x, target.body.position.y, halo);
       this.guide.lineStyle(1.3, 0x8faa6d, 0.75).strokeCircle(target.body.position.x, target.body.position.y, halo);
     }
@@ -562,7 +582,7 @@ export class GardenScene extends Phaser.Scene {
           }
           let overflowing = false;
           for (const fruit of this.fruits.values()) {
-            if (this.clock - fruit.born > SPAWN_GRACE && fruit.body.position.y - fruit.body.circleRadius < BOARD.danger) overflowing = true;
+            if (this.clock - fruit.born > SPAWN_GRACE && fruit.body.vertices?.some(vertex => vertex.y < BOARD.danger)) overflowing = true;
           }
           this.dangerMs = advanceDanger(this.dangerMs, overflowing, FIXED_STEP, this.difficulty);
           if (this.dangerMs >= DIFFICULTIES[this.difficulty].dangerLimit) {
@@ -586,7 +606,7 @@ export class GardenScene extends Phaser.Scene {
     for (const fruit of this.fruits.values()) {
       const { x, y } = fruit.body.position;
       const diameter = FRUIT_STYLES[this.fruitStyle].sprites[fruit.level][5];
-      const radius = fruit.body.circleRadius;
+      const radius = fruitBodyRadius(fruit.body);
       const baseScale = radius * 2 / diameter;
       const popTime = Math.min(1, Math.max(0, (this.clock - fruit.born) / 240));
       const pop = fruit.merged && !this.gentle ? 1 + Math.sin(popTime * Math.PI) * 0.035 * (1 - popTime) : 1;

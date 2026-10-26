@@ -26,9 +26,17 @@ export function growthScale(progress: number): number {
 }
 
 export function growBody(body: MatterJS.BodyType, targetRadius: number, progress: number, api: BodyAPI): void {
-  const current = body.circleRadius;
+  const current = body.plugin.gardenRadius ?? body.circleRadius;
   const next = targetRadius * growthScale(progress);
-  if (current > 0 && Math.abs(next - current) > 0.00001) api.scale(body, next / current, next / current);
+  if (current > 0 && Math.abs(next - current) > 0.00001) {
+    const ratio = next / current;
+    api.scale(body, ratio, ratio);
+    if (body.parts.length > 1) {
+      // Matter scales compound vertices, but only updates circleRadius on the root.
+      for (const part of body.parts.slice(1)) if (part.circleRadius) part.circleRadius *= ratio;
+      body.plugin.gardenRadius = next;
+    }
+  }
 }
 
 // A brief, local pressure pulse; movement beyond this neighborhood travels through real contacts.
@@ -37,7 +45,7 @@ export function applyMergePressure(merged: MatterJS.BodyType, radius: number, ne
     if (body.id === merged.id || body.isStatic) continue;
     const dx = body.position.x - merged.position.x, dy = body.position.y - merged.position.y;
     const distance = Math.hypot(dx, dy);
-    const reach = radius * 1.8 + (body.circleRadius || 0);
+    const reach = radius * 1.8 + (body.plugin.gardenRadius ?? body.circleRadius ?? 0);
     if (distance < 1 || distance >= reach) continue;
     const weight = Math.min(1, (reach - distance) / Math.max(1, radius * 0.8));
     const pressure = (0.0015 + radius * 0.000009) * weight * body.mass;

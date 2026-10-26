@@ -34,6 +34,8 @@ export function mountQA(scene: GardenScene, start: (snapshot: SessionSnapshot) =
     }), 6), current: 2, next: 2 })],
     ['撤回试种', () => snapshot(touching(0, 1))],
     ['柠檬与菠萝', () => snapshot([{ level: 4, x: 120, y: BOARD.floor - fruitRadius(4, scene.difficulty), angle: 0 }, { level: 8, x: 270, y: BOARD.floor - fruitRadius(8, scene.difficulty), angle: 0 }], 8)],
+    ['菠萝与西瓜', () => snapshot([{ level: 8, x: 90, y: BOARD.floor - fruitRadius(8, scene.difficulty), angle: 0 }, { level: 10, x: 270, y: BOARD.floor - fruitRadius(10, scene.difficulty), angle: 0 }], 10)],
+    ['叶冠落果', () => snapshot([{ level: 8, x: 200, y: BOARD.floor - fruitRadius(8, scene.difficulty), angle: 0 }, { level: 0, x: 200, y: 220, angle: 0, age: 0 }], 8)],
     ['三果碰撞', () => snapshot(touching(0, 3))],
     ['合出西瓜', () => snapshot(touching(9, 2), 9)],
     ['双瓜清空', () => snapshot(touching(10, 2), 10)],

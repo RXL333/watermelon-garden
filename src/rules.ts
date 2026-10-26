@@ -10,7 +10,7 @@ export const FRUITS = [
   { name: '猕猴桃', radius: 36, points: 21, color: 0x9eae6c },
   { name: '蜜桃', radius: 43, points: 28, color: 0xefb0a4 },
   { name: '苹果', radius: 50, points: 36, color: 0xde8272 },
-  { name: '菠萝', radius: 58, points: 45, color: 0xdec079 },
+  { name: '菠萝', radius: 40, points: 45, color: 0xdec079 },
   { name: '蜜瓜', radius: 68, points: 55, color: 0xb0c495 },
   { name: '西瓜', radius: 80, points: 66, color: 0x6f9e71 },
 ] as const;

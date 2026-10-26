@@ -5,6 +5,7 @@ import { DEFAULT_FRUIT_STYLE, FRUIT_STYLES, FRUIT_STYLE_IDS, isFruitStyle, fruit
 import { GardenStorage } from './storage.ts';
 import { GardenAudio } from './audio.ts';
 import { createGarden, type GardenScene } from './game.ts';
+import type { HistoryEntry } from './round-history.ts';
 
 const storage = new GardenStorage();
 const initialUndos = storage.session?.undosLeft ?? UNDO_LIMIT;
@@ -66,7 +67,7 @@ document.querySelector<HTMLDivElement>('#app')!.innerHTML = `
       <div class="growth-heading"><button id="difficulty" class="text-button mode-button" aria-label="选择难度" disabled>${icon('leaf')} <span id="mode-label">${DIFFICULTIES[selectedDifficulty].name}难度</span> <span class="mode-chevron" aria-hidden="true">⌄</span></button><button id="undo" class="text-button undo-button" aria-label="撤回上一步，剩余${initialUndos}次" title="撤回最近一次投放，每局3次" disabled>${icon('undo')} 撤回 <span id="undo-count">${initialUndos}</span></button><button id="collection" class="text-button">水果图鉴 ${icon('book')}</button></div>
       <ol id="fruit-strip" class="fruit-strip">${FRUITS.map((f, i) => `<li data-level="${i}" aria-label="${i + 1}级${f.name}" title="${f.name}">${fruitArt(i)}${i < 10 ? '<span class="growth-dot"></span>' : ''}</li>`).join('')}</ol>
     </section>
-    <footer class="playing-hint"><span id="hint-icon">${icon('hand')}</span><span id="hint">${pointerHint}</span><span class="hint-flower" aria-hidden="true">✿</span></footer>
+    <footer class="playing-hint"><span id="hint-icon">${icon('hand')}</span><span id="hint">${pointerHint}</span><button id="history" class="text-button history-entry">${icon('history')} 历史记录</button></footer>
   </main>
   <dialog id="dialog" class="garden-dialog" aria-labelledby="dialog-title"><div id="dialog-content"></div></dialog>
 `;
@@ -84,6 +85,8 @@ let feedbackTimeout: ReturnType<typeof setTimeout>;
 let scoreTimeout: ReturnType<typeof setTimeout>;
 let ready = false;
 let displayedScore = 0;
+let historyFilter: Difficulty | 'all' = 'all';
+let historyVisible = 20;
 let offlineState: 'preparing' | 'ready' | 'unavailable' | 'failed' = import.meta.env.PROD && 'serviceWorker' in navigator ? 'preparing' : 'unavailable';
 const offlineText = (): string => ({ preparing: '正在准备离线资源…', ready: '离线资源已就绪，下次没网也能打开', unavailable: '当前浏览器需要联网打开小院', failed: '离线准备暂未完成，联网时仍可游玩' })[offlineState];
 function updateOffline(state: typeof offlineState): void {
@@ -148,6 +151,8 @@ function announce(text: string, celebration = false, fruit?: number): void {
 function begin(resume: boolean, preset?: SessionSnapshot, difficulty = selectedDifficulty): void {
   if (!ready) return;
   const snapshot = preset ?? (resume ? storage.session ?? undefined : undefined);
+  if (!resume && storage.session) storage.finishRound(storage.session, 'restarted');
+  storage.beginRound(resume && !!snapshot);
   selectedDifficulty = snapshot?.difficulty ?? difficulty;
   storage.preferences.difficulty = selectedDifficulty;
   bestAtStart = storage.bestFor(selectedDifficulty);
@@ -185,11 +190,49 @@ function showPause(): void {
     <button class="secondary-button" data-action="restart">重新开始 ${icon('restart')}</button>
     <button class="pause-difficulty text-button" data-action="difficulty">${DIFFICULTIES[scene.difficulty].name}难度 · 更换难度 ${icon('arrow')}</button>
     <button class="pause-style text-button" data-action="styles">${icon('palette')} 水果风格 · ${FRUIT_STYLES[selectedStyle].name} ${icon('arrow')}</button>
+    <button class="text-button pause-history" data-action="history">${icon('history')} 看看每局的收获 ${icon('arrow')}</button>
     <p class="pause-tip">${icon('undo')} 本局还可撤回 ${scene.undosLeft} 次，给小失误一点余地</p>
     <label class="setting-row"><span><strong>轻柔动效</strong><small>减少粒子与画面晃动</small></span><input id="gentle" type="checkbox" role="switch" ${storage.preferences.gentle ? 'checked' : ''}><span class="switch" aria-hidden="true"></span></label>
     <p class="save-note">${storage.available ? `${icon('check')} 进度已保存在这台设备` : '当前浏览器无法保存进度，关闭页面后记录可能丢失'}</p>
     <p class="offline-note" id="offline-status">${offlineText()}</p>
   `);
+}
+
+const historyTime = (time: number): string => new Date(time).toLocaleString('zh-CN', {
+  year: 'numeric', month: '2-digit', day: '2-digit', hour: '2-digit', minute: '2-digit', hour12: false,
+});
+
+function historyCard(entry: Pick<HistoryEntry, 'score' | 'drops' | 'highest' | 'difficulty'>, time: string, status: string, ongoing = false): string {
+  return `<li class="history-card${ongoing ? ' is-ongoing' : ''}">
+    <span class="history-fruit" aria-hidden="true">${fruitArt(entry.highest)}</span>
+    <div class="history-card-copy"><div class="history-card-heading"><strong>${entry.score.toLocaleString()}<small> 分</small></strong><span>${DIFFICULTIES[entry.difficulty].name} · ${status}</span></div>
+    <p>${time}</p><small>最高${FRUITS[entry.highest].name} · 投下 ${entry.drops.toLocaleString()} 颗</small></div>
+  </li>`;
+}
+
+function showHistory(reset = true): void {
+  const willResume = resumeOnClose || scene?.phase === 'playing';
+  scene?.pause();
+  if (reset) { historyFilter = 'all'; historyVisible = 20; }
+  const entries = storage.history.filter(entry => historyFilter === 'all' || entry.difficulty === historyFilter);
+  const historyBest = entries.reduce((best, entry) => Math.max(best, entry.score), 0);
+  const current = storage.session;
+  const ongoing = current && current.drops > 0 && (historyFilter === 'all' || current.difficulty === historyFilter);
+  showDialog(`
+    ${closeButton}<span class="dialog-eyebrow">EVERY LITTLE HARVEST</span>
+    <h2 id="dialog-title">小院收获记</h2>
+    <p class="history-intro">每一次认真种下，都值得记住。</p>
+    <div class="history-summary"><div><small>已记录对局</small><strong>${entries.length.toLocaleString()}<span> 局</span></strong></div><div><small>历史最高分</small><strong>${entries.length ? historyBest.toLocaleString() : '—'}<span>${entries.length ? ' 分' : ''}</span></strong></div></div>
+    <div class="history-filters" role="group" aria-label="按难度查看记录">${(['all', ...DIFFICULTY_IDS] as const).map(id => `<button data-history-filter="${id}" aria-pressed="${id === historyFilter}">${id === 'all' ? '全部' : DIFFICULTIES[id].name}</button>`).join('')}</div>
+    <div class="history-scroll">
+      <ol class="history-list" aria-label="对局记录，最近的在前">${ongoing ? historyCard(current, '上次进度已保存，可以继续这一局', '进行中', true) : ''}${entries.slice(0, historyVisible).map(entry => historyCard(entry, historyTime(entry.endedAt), entry.reason === 'finished' ? '已结束' : '主动重开')).join('')}</ol>
+      ${entries.length || ongoing ? '' : `<div class="history-empty">${icon('leaf')}<strong>${historyFilter === 'all' ? '等待第一份小收获' : '这档难度还没有收获记录'}</strong><p>每局结束或重新开始后，<br>分数就会记在这里。</p></div>`}
+      ${entries.length > historyVisible ? `<button class="text-button history-more" data-action="history-more">再看 20 局 · 还有 ${entries.length - historyVisible} 局 ${icon('arrow')}</button>` : ''}
+    </div>
+    <div class="history-footer"><p class="history-note">${storage.available ? '仅保存在当前浏览器 · 从本次更新起记录' : '当前浏览器无法保存记录，关闭页面后可能丢失'}</p><button class="primary-button" data-action="close">${willResume ? '继续这一局' : '返回小院'} ${icon('leaf')}</button></div>
+  `, false);
+  resumeOnClose = willResume;
+  dialog.dataset.view = 'history';
 }
 
 function showStyles(): void {
@@ -261,7 +304,7 @@ function showDifficulty(): void {
         ${fruitArt([3, 6, 10][i])}<span class="difficulty-card-copy"><strong>${mode.name}<small>${mode.subtitle}</small></strong><span>${i === 0 ? '水果更小' : i === 1 ? '标准大小' : '水果更大'} · ${mode.dropWeights.length} 种出果 · 宽限 ${mode.dangerLimit / 1000} 秒</span><span class="difficulty-best">本机最佳 ${storage.bestFor(id).toLocaleString()} 分</span></span><span class="difficulty-check" aria-hidden="true">${icon('check')}</span>
       </button>`;
     }).join('')}</div>
-    <p class="difficulty-warning">${hasProgress ? '选择后开始新一局，当前进度会被替换。' : '三档独立记录最佳分，水果图鉴共同成长。'}</p>
+    <p class="difficulty-warning">${hasProgress ? '选择后开始新一局，本局分数会记入历史。' : '三档独立记录最佳分，水果图鉴共同成长。'}</p>
     <button class="primary-button" data-action="difficulty-start">开始${DIFFICULTIES[pendingDifficulty].name}新局 ${icon('leaf')}</button>
     <button class="text-button difficulty-cancel" data-action="close">${willResume ? '继续当前对局' : '再想一想'}</button>
   `, false);
@@ -273,7 +316,7 @@ function confirmRestart(): void {
   showDialog(`
     ${closeButton}<div class="dialog-art small">${fruitArt(3)}</div>
     <h2 id="dialog-title">种一片新的小院？</h2>
-    <p class="dialog-copy">继续使用${DIFFICULTIES[selectedDifficulty].name}难度。当前进度会被替换，<br>你的最佳纪录和水果图鉴都会保留。</p>
+    <p class="dialog-copy">继续使用${DIFFICULTIES[selectedDifficulty].name}难度，本局分数会记入历史。<br>最佳纪录和水果图鉴也会保留。</p>
     <button class="primary-button" data-action="new-game">开始新的一局 ${icon('leaf')}</button>
     <button class="text-button" data-action="difficulty">想试试其他难度 ${icon('arrow')}</button>
     <button class="secondary-button" data-action="close">留在这一局</button>
@@ -319,6 +362,7 @@ function showHarvest(score: number, highest: number): void {
     <button class="primary-button" data-action="new-game">再种一颗小期待 ${icon('leaf')}</button>
     <button class="secondary-button" data-action="collection">看看水果图鉴 ${icon('book')}</button>
     <button class="text-button" data-action="difficulty">换个难度再出发 ${icon('arrow')}</button>
+    <button class="text-button" data-action="history">看看历史记录 ${icon('history')}</button>
   `, false);
 }
 
@@ -363,7 +407,7 @@ scene = createGarden($('#game'), {
   merge(combo) { if (combo >= 2 && !feedback.classList.contains('is-celebration') && !feedback.classList.contains('is-discovery')) announce(`${combo} 连合成 · 小小的连锁惊喜`); },
   victory() { announce('收获大西瓜！今天也有好心情', true, 10); },
   over(score, highest) {
-    storage.save(null);
+    storage.finishRound({ score, highest, drops: scene.drops, difficulty: scene.difficulty }, 'finished');
     pauseButton.disabled = true;
     showHarvest(score, highest);
   },
@@ -388,6 +432,7 @@ undoButton.addEventListener('click', undoLastDrop);
 $('.playfield').addEventListener('animationend', event => { if (event.animationName === 'rewind-wash') $('.playfield').classList.remove('is-rewinding'); });
 $('#difficulty').addEventListener('click', showDifficulty);
 $('#styles').addEventListener('click', showStyles);
+$('#history').addEventListener('click', () => showHistory());
 document.querySelectorAll<HTMLButtonElement>('[data-intro-difficulty]').forEach(button => button.addEventListener('click', () => {
   if (!isDifficulty(button.dataset.introDifficulty)) return;
   selectedDifficulty = button.dataset.introDifficulty;
@@ -412,6 +457,13 @@ $('#restore-art').addEventListener('click', () => {
 });
 
 dialog.addEventListener('click', event => {
+  const filter = (event.target as HTMLElement).closest<HTMLElement>('[data-history-filter]')?.dataset.historyFilter;
+  if (filter === 'all' || isDifficulty(filter)) {
+    historyFilter = filter;
+    historyVisible = 20;
+    showHistory(false);
+    return;
+  }
   const style = (event.target as HTMLElement).closest<HTMLButtonElement>('[data-pick-style]');
   if (style && !style.disabled && isFruitStyle(style.dataset.pickStyle)) {
     pendingStyle = style.dataset.pickStyle;
@@ -436,6 +488,13 @@ dialog.addEventListener('click', event => {
   if (action === 'collection') showCollection();
   if (action === 'difficulty') showDifficulty();
   if (action === 'styles') showStyles();
+  if (action === 'history') showHistory();
+  if (action === 'history-more') {
+    const scroll = dialog.querySelector('.history-scroll')?.scrollTop ?? 0;
+    historyVisible += 20;
+    showHistory(false);
+    dialog.querySelector('.history-scroll')!.scrollTop = scroll;
+  }
   if (action === 'style-apply' && !(event.target as HTMLElement).closest<HTMLButtonElement>('button')?.disabled) void applyChosenStyle();
   if (action === 'difficulty-start') begin(false, undefined, pendingDifficulty);
 });
