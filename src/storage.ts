@@ -11,6 +11,7 @@ export class GardenStorage {
   session: SessionSnapshot | null = null;
   history: HistoryEntry[] = [];
   activeRound: ActiveRound | null = null;
+  tutorialSeen = false;
   preferences: Preferences = { sound: true, gentle: typeof window !== 'undefined' && window.matchMedia('(prefers-reduced-motion: reduce)').matches, difficulty: DEFAULT_DIFFICULTY, fruitStyle: DEFAULT_FRUIT_STYLE };
   available = true;
   private backend?: Pick<Storage, 'getItem' | 'setItem'>;
@@ -32,6 +33,7 @@ export class GardenStorage {
       if (typeof data.preferences?.gentle === 'boolean') this.preferences.gentle = data.preferences.gentle;
       if (isDifficulty(data.preferences?.difficulty)) this.preferences.difficulty = data.preferences.difficulty;
       if (isFruitStyle(data.preferences?.fruitStyle)) this.preferences.fruitStyle = data.preferences.fruitStyle;
+      if (typeof data.tutorialSeen === 'boolean') this.tutorialSeen = data.tutorialSeen;
       this.session = validateSession(data.session);
       this.history = validateHistory(data.history);
       this.activeRound = this.session ? validateActiveRound(data.activeRound) : null;
@@ -72,7 +74,7 @@ export class GardenStorage {
     this.session = session;
     try {
       if (!this.backend) { this.available = false; return; }
-      this.backend.setItem(KEY, JSON.stringify({ version: 1, best: this.bests.classic, bests: this.bests, discovered: this.discovered, preferences: this.preferences, session, history: this.history, activeRound: this.activeRound }));
+      this.backend.setItem(KEY, JSON.stringify({ version: 1, best: this.bests.classic, bests: this.bests, discovered: this.discovered, preferences: this.preferences, session, history: this.history, activeRound: this.activeRound, tutorialSeen: this.tutorialSeen }));
     } catch { this.available = false; }
   }
 }

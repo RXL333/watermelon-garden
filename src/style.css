@@ -321,6 +321,48 @@ button .icon { flex-shrink: 0; }
 .history-entry { flex-shrink: 0; min-height: 44px; gap: 4px; margin-left: 4px; padding: 0 3px; font-size: 10px; color: #7d906b; }
 .history-entry .icon { width: 15px; height: 15px; }
 .pause-history { margin: 8px auto -8px; font-size: 10px; }
+.help-entry { flex-shrink: 0; min-height: 44px; gap: 4px; padding: 0 3px; font-size: 10px; color: #7d906b; }
+.help-entry .icon { width: 15px; height: 15px; }
+.pause-tutorial { margin: 8px auto -8px; font-size: 10px; }
+.is-touring .intro { visibility: hidden; pointer-events: none; }
+.tutorial { position: fixed; inset: 0; width: 100vw; height: 100dvh; max-width: none; max-height: none; margin: 0; padding: 0; border: 0; overflow: hidden; background: transparent; color: var(--ink); overscroll-behavior: none; }
+.tutorial[open] { display: block; }
+.tutorial::backdrop { background: transparent; }
+.tutorial-spotlight { position: fixed; border: 2px solid #f6f9d8; border-radius: 18px; box-shadow: 0 0 0 200vmax #263c32a3, 0 0 0 5px #f4f7c82e, inset 0 0 0 1px #ffffff90; pointer-events: none; }
+.tutorial-aim-demo { position: absolute; left: calc(50% - 58px); top: 8%; width: 116px; display: flex; align-items: center; justify-content: center; gap: 12px; color: #b1b99a; animation: tutorial-aim 3.5s ease-in-out infinite; }
+[data-gentle="true"] .tutorial-aim-demo { animation: none; }
+.tutorial-aim-demo .fruit-art { width: 39px; }
+.tutorial-aim-demo .icon { width: 18px; height: 18px; stroke-width: 1.2; }
+.tutorial-aim-demo small { position: absolute; top: 42px; font-size: 9px; letter-spacing: 2px; color: #8d9a79; white-space: nowrap; }
+.tutorial-danger-demo { position: absolute; left: 4px; right: 4px; top: 41.67%; border-top: 1px dashed #b29272; text-align: right; color: #a69173; font-size: 8px; letter-spacing: 2px; padding: 1px 9px 0; }
+@keyframes tutorial-aim { 0%, 100% { transform: translateX(-26px); } 50% { transform: translateX(26px); } }
+.tutorial-card { position: fixed; z-index: 1; width: min(calc(100vw - 24px), 350px); padding: 17px 18px 16px; border: 1px solid #ffffff; border-radius: 22px; background: radial-gradient(ellipse at 90% 8%, #e5ebd7a1, transparent 60%), #fffdf5; box-shadow: 0 16px 65px #172e2838, inset 0 0 0 4px #f4f4e8; overflow-y: auto; overscroll-behavior: contain; }
+.tutorial-heading { display: flex; align-items: center; gap: 9px; padding-right: 59px; min-height: 24px; color: #8b997b; font-size: 10px; letter-spacing: 1px; white-space: nowrap; }
+.tutorial-heading > span:first-child { display: flex; align-items: center; gap: 5px; }
+.tutorial-heading .icon { width: 16px; height: 16px; fill: #e0e8cc; }
+#tutorial-count { font-family: Georgia, serif; font-size: 12px; color: #9ca87e; letter-spacing: 1px; }
+.tutorial-skip { position: absolute; right: 7px; top: 6px; display: flex; align-items: center; justify-content: center; gap: 3px; min-width: 59px; min-height: 44px; padding: 0 6px; border-radius: 12px; background: transparent; color: #8c987e; font-size: 10px; }
+.tutorial-skip .icon { width: 13px; height: 13px; }
+.tutorial-progress { display: flex; gap: 5px; margin: 9px 0 15px; }
+.tutorial-progress span { flex: 1; height: 3px; border-radius: 2px; background: #e8ebdb; }
+.tutorial-progress .is-read { background: #92aa77; }
+.tutorial-card h2 { margin: 0 0 9px; font-family: "STKaiti", "KaiTi", "Songti SC", serif; font-weight: 500; font-size: 23px; line-height: 1.4; letter-spacing: .5px; color: #496748; outline: none; }
+#tutorial-copy { margin: 0; color: #7b886d; font-size: 12px; line-height: 1.85; letter-spacing: .2px; }
+.tutorial-illustration:not(:empty) { display: flex; align-items: center; justify-content: center; gap: 7px; padding: 8px 0 18px; margin: 9px 0 3px; position: relative; color: #a8b58b; }
+.tutorial-illustration .fruit-art { width: 43px; }
+.tutorial-illustration > .icon { width: 24px; height: 20px; margin: 0 4px; stroke-width: 1.2; }
+.tutorial-illustration small { position: absolute; bottom: 0; font-size: 9px; letter-spacing: 1px; color: #a3ad92; }
+.tutorial-actions { display: flex; align-items: center; gap: 13px; margin-top: 18px; }
+.tutorial-back { display: flex; align-items: center; justify-content: center; gap: 5px; flex: 0 0 81px; min-height: 44px; padding: 0; background: transparent; color: #89997a; font-size: 11px; }
+.tutorial-back .icon { width: 16px; height: 16px; }
+.tutorial-actions .primary-button { flex: 1; min-height: 44px; padding: 10px 9px; gap: 8px; font-size: 12px; }
+@media (max-height: 620px) {
+  .tutorial-card { padding: 13px 15px; border-radius: 19px; }
+  .tutorial-card h2 { font-size: 21px; margin-bottom: 7px; }
+  .tutorial-progress { margin: 6px 0 11px; }
+  .tutorial-illustration:not(:empty) { display: none; }
+  .tutorial-actions { margin-top: 13px; }
+}
 .garden-dialog[data-view="history"] { width: min(calc(100% - 28px), 420px); padding: 25px 19px 18px; overflow: hidden; }
 .garden-dialog[data-view="history"] #dialog-content { display: flex; flex-direction: column; max-height: calc(100dvh - 100px - env(safe-area-inset-top) - env(safe-area-inset-bottom)); }
 .garden-dialog[data-view="history"] #dialog-content > :not(.history-scroll) { flex-shrink: 0; }

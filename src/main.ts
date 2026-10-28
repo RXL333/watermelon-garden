@@ -1,11 +1,12 @@
 import './style.css';
 import { icon, fruitArt as renderFruitArt } from './icons.ts';
-import { FRUITS, DIFFICULTIES, DIFFICULTY_IDS, UNDO_LIMIT, isDifficulty, type Difficulty, type SessionSnapshot } from './rules.ts';
+import { BOARD, FRUITS, DIFFICULTIES, DIFFICULTY_IDS, UNDO_LIMIT, isDifficulty, type Difficulty, type SessionSnapshot } from './rules.ts';
 import { DEFAULT_FRUIT_STYLE, FRUIT_STYLES, FRUIT_STYLE_IDS, isFruitStyle, fruitPaint, type FruitStyleId } from './fruit-art.ts';
 import { GardenStorage } from './storage.ts';
 import { GardenAudio } from './audio.ts';
 import { createGarden, type GardenScene } from './game.ts';
 import type { HistoryEntry } from './round-history.ts';
+import { GardenTutorial } from './tutorial.ts';
 
 const storage = new GardenStorage();
 const initialUndos = storage.session?.undosLeft ?? UNDO_LIMIT;
@@ -18,6 +19,7 @@ const fruitArt = (level: number, className = ''): string => renderFruitArt(level
 const audio = new GardenAudio();
 audio.enabled = storage.preferences.sound;
 document.documentElement.dataset.fruitStyle = selectedStyle;
+document.documentElement.dataset.gentle = String(storage.preferences.gentle);
 const pointerHint = matchMedia('(hover: hover) and (pointer: fine)').matches ? '移动鼠标瞄准，点击落下' : '按住移动，松手落下';
 
 document.querySelector<HTMLDivElement>('#app')!.innerHTML = `
@@ -67,7 +69,7 @@ document.querySelector<HTMLDivElement>('#app')!.innerHTML = `
       <div class="growth-heading"><button id="difficulty" class="text-button mode-button" aria-label="选择难度" disabled>${icon('leaf')} <span id="mode-label">${DIFFICULTIES[selectedDifficulty].name}难度</span> <span class="mode-chevron" aria-hidden="true">⌄</span></button><button id="undo" class="text-button undo-button" aria-label="撤回上一步，剩余${initialUndos}次" title="撤回最近一次投放，每局3次" disabled>${icon('undo')} 撤回 <span id="undo-count">${initialUndos}</span></button><button id="collection" class="text-button">水果图鉴 ${icon('book')}</button></div>
       <ol id="fruit-strip" class="fruit-strip">${FRUITS.map((f, i) => `<li data-level="${i}" aria-label="${i + 1}级${f.name}" title="${f.name}">${fruitArt(i)}${i < 10 ? '<span class="growth-dot"></span>' : ''}</li>`).join('')}</ol>
     </section>
-    <footer class="playing-hint"><span id="hint-icon">${icon('hand')}</span><span id="hint">${pointerHint}</span><button id="history" class="text-button history-entry">${icon('history')} 历史记录</button></footer>
+    <footer class="playing-hint"><span id="hint-icon">${icon('hand')}</span><span id="hint">${pointerHint}</span><button id="tutorial-entry" class="text-button help-entry" aria-label="查看新手教程" disabled>${icon('help')} 新手指南</button><button id="history" class="text-button history-entry">${icon('history')} 历史记录</button></footer>
   </main>
   <dialog id="dialog" class="garden-dialog" aria-labelledby="dialog-title"><div id="dialog-content"></div></dialog>
 `;
@@ -88,6 +90,38 @@ let displayedScore = 0;
 let historyFilter: Difficulty | 'all' = 'all';
 let historyVisible = 20;
 let offlineState: 'preparing' | 'ready' | 'unavailable' | 'failed' = import.meta.env.PROD && 'serviceWorker' in navigator ? 'preparing' : 'unavailable';
+let resumeAfterTutorial = false;
+const tutorial = new GardenTutorial({
+  steps: () => [
+    { title: '先种下第一颗小期待', copy: pointerHint === '按住移动，松手落下' ? '按住游戏区移动，松手落下。相同水果碰到一起，会合成更大一颗。' : '移动鼠标瞄准，点击落下。相同水果碰到一起，会合成更大一颗。', selectors: ['#game canvas'], area: { x: .06, y: .025, width: .88, height: .18 }, illustration: `${fruitArt(0)}<span>+</span>${fruitArt(0)}${icon('arrow')}${fruitArt(1)}<small>两颗一样的，长大一点点</small>`, spotlightIllustration: scene.phase === 'intro' ? `<div class="tutorial-aim-demo">${icon('arrow', 'back-arrow')}${fruitArt(0)}${icon('arrow')}<small>左右瞄准</small></div>` : undefined },
+    { title: '分数和下一颗，看这里', copy: '合成水果就能得分，每档难度分别记录最佳分。右侧“下一个”预告下一颗；游戏区上方悬着的是现在要投下的水果。', selectors: ['.scoreboard'] },
+    { title: '给小院留一点空间', copy: `这条虚线是警戒线。水果持续越线 ${DIFFICULTIES[selectedDifficulty].dangerLimit / 1000} 秒就会结束本局；抓住空隙合成，让果堆降下来。`, selectors: ['#game canvas'], area: { x: .08, y: BOARD.danger / BOARD.height - .025, width: .84, height: .06 }, spotlightIllustration: scene.phase === 'intro' ? '<span class="tutorial-danger-demo">警戒线</span>' : undefined },
+    { title: '选一份喜欢的节奏', copy: '轻松、经典、挑战，三档难度由你选。游戏中更换难度会开始新的一局，当前分数会记入历史。', selectors: ['#difficulty'] },
+    { title: '落错了，也能退一步', copy: `每局有 ${UNDO_LIMIT} 次撤回。撤回会回到上一次投放前，连同随后的合成和分数一起恢复；旁边的数字是剩余次数。`, selectors: ['#undo'] },
+    { title: '认识每一颗小水果', copy: '下方一排是从葡萄到西瓜的合成顺序。打开“水果图鉴”，还能查看水果大图、合成得分和已发现的水果。', selectors: ['#collection', '#fruit-strip'] },
+    { title: '把小院调成喜欢的样子', copy: '调色盘：切换五套水果风格。喇叭：开关音效。暂停：暂歇、重新开始，也能开启“轻柔动效”，减少粒子和晃动。', selectors: ['.top-actions'] },
+    { title: '每次收获，都有记录', copy: '这里能回看每局分数、难度和最高水果。进度与记录保存在当前浏览器；想再看教程，随时点旁边的“新手指南”。', selectors: ['#history', '#tutorial-entry'] },
+  ],
+  finishLabel: () => scene.phase === 'intro' ? (storage.session ? '继续上次对局' : '开始种西瓜') : '回到这一局',
+  start() {
+    resumeAfterTutorial = scene.phase === 'playing' || resumeOnClose;
+    resumeOnClose = false;
+    if (dialog.open) dialog.close();
+    scene.pause();
+    $('.garden-app').classList.add('is-touring');
+  },
+  finish(completed) {
+    $('.garden-app').classList.remove('is-touring');
+    storage.tutorialSeen = true;
+    storage.save();
+    if (completed && scene.phase === 'intro') begin(!!storage.session);
+    else if (resumeAfterTutorial) {
+      scene.resume();
+      if (document.hidden) showPause();
+    }
+    resumeAfterTutorial = false;
+  },
+});
 const offlineText = (): string => ({ preparing: '正在准备离线资源…', ready: '离线资源已就绪，下次没网也能打开', unavailable: '当前浏览器需要联网打开小院', failed: '离线准备暂未完成，联网时仍可游玩' })[offlineState];
 function updateOffline(state: typeof offlineState): void {
   offlineState = state;
@@ -191,6 +225,7 @@ function showPause(): void {
     <button class="pause-difficulty text-button" data-action="difficulty">${DIFFICULTIES[scene.difficulty].name}难度 · 更换难度 ${icon('arrow')}</button>
     <button class="pause-style text-button" data-action="styles">${icon('palette')} 水果风格 · ${FRUIT_STYLES[selectedStyle].name} ${icon('arrow')}</button>
     <button class="text-button pause-history" data-action="history">${icon('history')} 看看每局的收获 ${icon('arrow')}</button>
+    <button class="text-button pause-tutorial" data-action="tutorial">${icon('help')} 再看一遍新手指南 ${icon('arrow')}</button>
     <p class="pause-tip">${icon('undo')} 本局还可撤回 ${scene.undosLeft} 次，给小失误一点余地</p>
     <label class="setting-row"><span><strong>轻柔动效</strong><small>减少粒子与画面晃动</small></span><input id="gentle" type="checkbox" role="switch" ${storage.preferences.gentle ? 'checked' : ''}><span class="switch" aria-hidden="true"></span></label>
     <p class="save-note">${storage.available ? `${icon('check')} 进度已保存在这台设备` : '当前浏览器无法保存进度，关闭页面后记录可能丢失'}</p>
@@ -372,9 +407,13 @@ scene = createGarden($('#game'), {
     startButton.disabled = false;
     $<HTMLButtonElement>('#difficulty').disabled = false;
     $<HTMLButtonElement>('#styles').disabled = false;
+    $<HTMLButtonElement>('#tutorial-entry').disabled = false;
     $('#start-label').textContent = storage.session ? `继续上次 · ${storage.session.score.toLocaleString()} 分` : '种下第一颗水果';
     $('#start-icon').outerHTML = icon('arrow');
     $('.garden-app').classList.add('is-ready');
+    if (!storage.tutorialSeen && !(import.meta.env.DEV && new URLSearchParams(location.search).has('qa'))) {
+      requestAnimationFrame(() => { if (!dialog.open && scene.phase === 'intro') tutorial.show(); });
+    }
   },
   error() { $('#load-error').hidden = false; $('#intro').classList.add('is-gone'); },
   score(score, highest) {
@@ -423,7 +462,7 @@ startButton.addEventListener('click', () => begin(!!storage.session));
 $('#fresh-start')?.addEventListener('click', showDifficulty);
 pauseButton.addEventListener('click', showPause);
 function undoLastDrop(): void {
-  if (dialog.open || !scene.undoDrop()) return;
+  if (dialog.open || tutorial.open || !scene.undoDrop()) return;
   announce('回到落下前，再想一想也很好');
   $('.playfield').classList.remove('is-rewinding');
   requestAnimationFrame(() => $('.playfield').classList.add('is-rewinding'));
@@ -433,6 +472,7 @@ $('.playfield').addEventListener('animationend', event => { if (event.animationN
 $('#difficulty').addEventListener('click', showDifficulty);
 $('#styles').addEventListener('click', showStyles);
 $('#history').addEventListener('click', () => showHistory());
+$('#tutorial-entry').addEventListener('click', () => tutorial.show());
 document.querySelectorAll<HTMLButtonElement>('[data-intro-difficulty]').forEach(button => button.addEventListener('click', () => {
   if (!isDifficulty(button.dataset.introDifficulty)) return;
   selectedDifficulty = button.dataset.introDifficulty;
@@ -489,6 +529,7 @@ dialog.addEventListener('click', event => {
   if (action === 'difficulty') showDifficulty();
   if (action === 'styles') showStyles();
   if (action === 'history') showHistory();
+  if (action === 'tutorial') tutorial.show();
   if (action === 'history-more') {
     const scroll = dialog.querySelector('.history-scroll')?.scrollTop ?? 0;
     historyVisible += 20;
@@ -501,6 +542,7 @@ dialog.addEventListener('click', event => {
 dialog.addEventListener('change', event => {
   if ((event.target as HTMLElement).id === 'gentle') {
     storage.preferences.gentle = (event.target as HTMLInputElement).checked;
+    document.documentElement.dataset.gentle = String(storage.preferences.gentle);
     scene.gentle = storage.preferences.gentle;
     storage.save();
   }
@@ -510,14 +552,14 @@ dialog.addEventListener('close', () => {
   if (resumeOnClose) scene.resume();
   resumeOnClose = false;
   // Closing the fruit book after a finished game returns to its result screen.
-  if (scene.phase === 'over') showHarvest(scene.score, scene.highest);
+  if (scene.phase === 'over' && !tutorial.open) showHarvest(scene.score, scene.highest);
 });
 document.addEventListener('visibilitychange', () => {
   if (document.hidden && scene.phase === 'playing') showPause();
 });
 window.addEventListener('pagehide', () => scene.save());
 document.addEventListener('keydown', event => {
-  if (dialog.open || event.target instanceof HTMLButtonElement || event.target instanceof HTMLInputElement) return;
+  if (dialog.open || tutorial.open || event.target instanceof HTMLButtonElement || event.target instanceof HTMLInputElement) return;
   if (scene.phase !== 'playing') return;
   if (event.code === 'ArrowLeft' || event.code === 'ArrowRight') {
     event.preventDefault();
